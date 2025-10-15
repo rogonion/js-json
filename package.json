@@ -1,10 +1,13 @@
 {
-  "name": "js-json",
+  "name": "@rogonion/js-json",
   "private": false,
   "description": "A library for manipulating objects that resemble the structure and layout of JSON.",
   "version": "1.0.0",
   "type": "module",
-  "types": "dist/types",
+  "files": [
+    "dist"
+  ],
+  "types": "dist/types/index.d.ts",
   "main": "dist/index.umd.js",
   "module": "dist/index.es.js",
   "author": "Declan Joseph",
@@ -17,6 +20,18 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.es.js",
+      "require": "./dist/index.umd.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rogonion/js-json.git"
+  },
+  "readme": "https://github.com/rogonion/js-json#README.md",
   "devDependencies": {
     "@types/node": "^24.5.2",
     "typescript": "~5.8.3",
