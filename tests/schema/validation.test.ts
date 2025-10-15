@@ -240,7 +240,7 @@ const TestData: ValidationData[] = [
             .withDefaultValue(() => {
                 return new Set<number>()
             })
-            .withChildNodesLinearCollectionElementsSchema(DynamicSchemaNode.create().withKind(DataKinds.Number).withTypeOf(typeof 0).build())
+            .withChildNodesAssociativeCollectionEntriesValueSchema(DynamicSchemaNode.create().withKind(DataKinds.Number).withTypeOf(typeof 0).build())
             .build(),
         Data: new Set<number>([1, 2, 3]),
         ExpectedOk: true
