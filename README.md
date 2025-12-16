@@ -29,7 +29,8 @@ The [core set of modules](src/object) for manipulating an object using `JSONPath
 
 ## Usage
 
-The library uses [vite](https://vite.dev/) and [pnpm](https://pnpm.io/) as the core build and dependency management foundation.
+The library uses [vite](https://vite.dev/) and [pnpm](https://pnpm.io/) as the core build and dependency management
+foundation.
 
 ### Install dependencies.
 
@@ -96,8 +97,7 @@ Useful for the following purposes:
 - Converting an object to a schema defined type. Allows extension with custom converters.
 - Deserializing data from json or yaml to a schema defined type. Allows extension with custom deserializers.
 - Recursively creating new nested objects with the [Set](src/object/set.ts) module. For example, a source empty nil
-  value of
-  type any can end up being an array of pointers to structs if that is the schema definition.
+  value of type any can end up being an array of user-defined classes if that is the schema definition.
 - Fetch the schema of data at a `JSONPath`.
 
 ## Supported data types
@@ -113,4 +113,3 @@ Useful for the following purposes:
         - `objects`
         - `classes`
         - `maps`
-
