@@ -1,0 +1,56 @@
+{
+    "name": "@rogonion/js-json",
+    "private": false,
+    "description": "A library for manipulating dynamic, JSON-like data structures in JavaScript. It provides tools for traversing, modifying, validating, and converting deeply nested objects (maps, sets, arrays, classes) using JSONPath.",
+    "version": "1.0.1",
+    "type": "module",
+    "files": [
+        "dist"
+    ],
+    "types": "dist/types/index.d.ts",
+    "main": "dist/index.umd.js",
+    "module": "dist/index.es.js",
+    "sideEffects": false,
+    "author": "Declan Joseph",
+    "license": "MIT",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc --project tsconfig.build.json && vite build",
+        "preview": "vite preview",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "prepublishOnly": "npm run build",
+        "publish": "npm publish --access public",
+        "format": "prettier --write ."
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/types/index.d.ts",
+            "import": "./dist/index.es.js",
+            "require": "./dist/index.umd.js"
+        }
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/rogonion/js-json.git"
+    },
+    "readme": "https://github.com/rogonion/js-json#README.md",
+    "keywords": [
+        "json",
+        "object",
+        "manipulation",
+        "utility"
+    ],
+    "devDependencies": {
+        "@types/node": "^25.3.0",
+        "prettier": "^3.8.1",
+        "typescript": "~5.9.3",
+        "vite": "^7.3.1",
+        "vite-plugin-dts": "^4.5.4",
+        "vite-tsconfig-paths": "^6.1.1",
+        "vitest": "^4.0.18"
+    },
+    "dependencies": {
+        "yaml": "^2.8.2"
+    }
+}

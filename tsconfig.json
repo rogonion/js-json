@@ -1,0 +1,27 @@
+{
+    "compilerOptions": {
+        "target": "ESNext",
+        "useDefineForClassFields": true,
+        "module": "ESNext",
+        "lib": ["ESNext", "DOM"],
+        "moduleResolution": "Bundler",
+        "strict": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "esModuleInterop": true,
+        "noEmit": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitReturns": true,
+        "skipLibCheck": true,
+        "verbatimModuleSyntax": true,
+        "paths": {
+            "@internal": ["./src/__internal__"],
+            "@core": ["./src/core"],
+            "@path": ["./src/path"],
+            "@schema": ["./src/schema"],
+            "@object": ["./src/object"]
+        }
+    },
+    "include": ["src", "tests"]
+}

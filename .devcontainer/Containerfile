@@ -1,0 +1,59 @@
+FROM registry.opensuse.org/opensuse/leap:16.0
+
+# 1. Install dependencies
+RUN zypper ref && zypper in -y \
+    openssh-server shadow sudo \
+    tar git curl wget gzip libstdc++6 \
+    glibc-locale which iproute2 \
+    gcc glibc-devel make gdb \
+    coreutils findutils grep which gawk sed util-linux \
+    && zypper clean -a
+
+# 2. Setup SSH & User
+# - PermitEmptyPasswords yes: Allows login without a password
+# - PasswordAuthentication yes: Enables password input
+RUN mkdir -p /var/run/sshd \
+    && ssh-keygen -A \
+    && echo "PermitEmptyPasswords yes" > /etc/ssh/sshd_config \
+    && echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config \
+    && echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+
+# -u 1000: Standard UID
+# passwd -d: DELETES the password (making it empty)
+RUN useradd -m -s /bin/bash -u 1000 dev \
+    && passwd -d dev \
+    && echo "dev ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# Switch to the dev user before installing nvm so it installs in the user's home directory
+USER dev
+
+# 3. Install nvm & Node.js
+ENV NVM_DIR="/home/dev/.nvm"
+ENV NODE_VERSION="22" 
+
+# Install nvm, source it, and install the specified Node version
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
+    && . "$NVM_DIR/nvm.sh" \
+    && nvm install ${NODE_VERSION} \
+    && nvm alias default ${NODE_VERSION} \
+    && nvm use default
+
+# Add Node/npm directly to the PATH so it's accessible globally without sourcing nvm
+ENV PATH="$NVM_DIR/versions/node/v${NODE_VERSION}/bin:${PATH}"
+
+# 4. Install vscode server (Ensure it is final layer as it is likely to change as vscode updates)
+ARG COMMIT_ID=""
+COPY --chown=dev:dev install_vscode.sh /tmp/install_vscode.sh
+RUN chmod +x /tmp/install_vscode.sh && /tmp/install_vscode.sh "$COMMIT_ID"
+
+# 5. Final steps
+EXPOSE 22
+
+# Ensure nvm loads properly for interactive login shells (via .profile)
+# Note: The nvm installer automatically appends to .bashrc, so we only add to .profile here.
+RUN echo 'export NVM_DIR="/home/dev/.nvm"' >> /home/dev/.profile \
+    && echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /home/dev/.profile \
+    && echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> /home/dev/.profile
+
+WORKDIR /home/dev
+CMD ["sudo", "/usr/sbin/sshd", "-D", "-e"]
