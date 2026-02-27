@@ -1,749 +1,641 @@
+import { IsArray, IsDefined, IsMap, IsObject, IsSet, JsonError } from '@core';
 import {
-    type Converter,
     type Converters,
-    DataKinds,
+    DataKind,
+    type DefaultConverter,
     DynamicSchema,
     DynamicSchemaNode,
+    GetDataKind,
     type Schema,
-    SchemaError,
     SchemaErrorCodes
-} from './core.ts'
-import {CollectionMemberSegment, JsonpathKeyRoot, type RecursiveDescentSegment} from '@path'
-import {
-    IsArray,
-    IsFunction,
-    IsMap,
-    IsMapAndNotEmpty,
-    IsNullOrUndefined,
-    IsObjectLiteral,
-    IsObjectLiteralAndNotEmpty,
-    IsSet,
-    JSONstringify
-} from '@core'
+} from './core';
+import { CollectionMemberSegment, type RecursiveDescentSegment } from '@path';
 
-/**
- * Module for converting data against {@link Schema}
- *
- * @class
- * */
-export class Conversion implements Converter {
-    private _customConverters: Converters
-
-    constructor(customConverters: Converters = new Map<string, Converter>()) {
-        this._customConverters = customConverters
+export class Conversion implements DefaultConverter {
+    private _CustomConverters: Converters = {};
+    public set CustomConverters(value: Converters) {
+        this._CustomConverters = value;
     }
 
-    /**
-     * @function
-     * @throws SchemaError
-     * */
-    public Convert(source: any, schema: Schema, pathSegments: RecursiveDescentSegment = [CollectionMemberSegment.create().WithKey(JsonpathKeyRoot).WithIsKeyRoot(true).build()]): any {
-        const FunctionName = 'Convert'
-
+    public RecursiveConvert(source: any, schema: Schema, pathSegments: RecursiveDescentSegment): any {
         if (schema instanceof DynamicSchema) {
-            return this.convertToDynamicSchema(source, schema, pathSegments)
+            return this.convertToDynamicSchema(source, schema, pathSegments);
         } else if (schema instanceof DynamicSchemaNode) {
-            return this.convertToDynamicSchemaNode(source, schema, pathSegments)
-        } else {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'unsupported schema type', schema, source, pathSegments)
+            return this.convertToDynamicSchemaNode(source, schema, pathSegments);
         }
+        throw Object.assign(
+            new JsonError('unsupported schema type', undefined, SchemaErrorCodes.SchemaProcessorError),
+            {
+                Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+            }
+        );
+    }
+
+    public Convert(source: any, schema: Schema): any {
+        return this.RecursiveConvert(source, schema, [
+            Object.assign(new CollectionMemberSegment(), { Key: '$', IsKeyRoot: true })
+        ]);
+    }
+
+    public ConvertNode(source: any, schema: DynamicSchemaNode): any {
+        return this.convertToDynamicSchemaNode(source, schema, []);
     }
 
     private convertToDynamicSchema(source: any, schema: DynamicSchema, pathSegments: RecursiveDescentSegment): any {
-        const FunctionName = 'convertToDynamicSchema'
-
-        if (!IsArray(schema.ValidSchemaNodeKeys)) {
-            schema.ValidSchemaNodeKeys = []
+        // Try default node first
+        if (schema.DefaultSchemaNodeKey && schema.Nodes[schema.DefaultSchemaNodeKey]) {
+            try {
+                const result = this.convertToDynamicSchemaNode(
+                    source,
+                    schema.Nodes[schema.DefaultSchemaNodeKey],
+                    pathSegments
+                );
+                schema.ValidSchemaNodeKeys.push(schema.DefaultSchemaNodeKey);
+                return result;
+            } catch (e) {
+                // Ignore and try others
+            }
         }
 
-        if (schema.DefaultSchemaNodeKey) {
-            if (schema.Nodes?.has(schema.DefaultSchemaNodeKey)) {
-                try {
-                    const result = this.convertToDynamicSchemaNode(source, schema.Nodes!.get(schema.DefaultSchemaNodeKey)!, pathSegments)
-                    schema.ValidSchemaNodeKeys!.push(schema.DefaultSchemaNodeKey)
-                    return result
-                } catch (e) {
+        if (Object.keys(schema.Nodes).length === 0) {
+            throw Object.assign(
+                new JsonError('no schema nodes found', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
                 }
-            }
+            );
         }
 
-        if (!IsMap(schema.Nodes)) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'no schema nodes found', schema, source, pathSegments)
-        }
-
-        let lastSchemaNodeError: SchemaError | undefined
-        for (const [schemaNodeKey, dynamicSchemaNode] of schema.Nodes!) {
-            if (schemaNodeKey === schema.DefaultSchemaNodeKey) {
-                continue
-            }
+        let lastError: Error | undefined;
+        for (const [key, node] of Object.entries(schema.Nodes)) {
+            if (key === schema.DefaultSchemaNodeKey) continue;
 
             try {
-                const result = this.convertToDynamicSchemaNode(source, dynamicSchemaNode, pathSegments)
-                schema.ValidSchemaNodeKeys!.push(schemaNodeKey)
-                return result
-            } catch (e) {
-                lastSchemaNodeError = e as SchemaError
+                const result = this.convertToDynamicSchemaNode(source, node, pathSegments);
+                schema.ValidSchemaNodeKeys.push(key);
+                return result;
+            } catch (e: any) {
+                lastError = e;
             }
         }
 
-        if (lastSchemaNodeError) {
-            throw lastSchemaNodeError
-        }
-        return undefined
+        throw (
+            lastError ||
+            Object.assign(
+                new JsonError(
+                    'failed to convert against any schema node',
+                    undefined,
+                    SchemaErrorCodes.DataConversionFailed
+                ),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            )
+        );
     }
 
-    private convertToDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): any {
-        const FunctionName = 'convertToDynamicSchemaNode'
-
-        if (IsNullOrUndefined(source)) {
-            if (schema.NullableOrUndefined) {
-                return source
-            }
-
-            if (schema.IsDefaultValueSet) {
-                return structuredClone(schema.DefaultValue)
-            }
+    private convertToDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        // Handle null/undefined
+        if (!IsDefined(source)) {
+            if (schema.DefaultValue) return schema.DefaultValue();
+            if (schema.Nullable) return null;
+            return undefined;
         }
 
-        if (schema.Kind === DataKinds.Any) {
-            return source
-        }
-
+        // Converter check
         if (schema.Converter) {
-            return schema.Converter.Convert(source, schema, pathSegments)
+            return schema.Converter.Convert(source, schema, pathSegments);
         }
 
-        if (!IsNullOrUndefined(source)) {
-            const typeName = source.constructor.name
-            if (this._customConverters.has(typeName)) {
-                return this._customConverters.get(typeName)!.Convert(source, schema, pathSegments)
-            }
+        // Custom converters check
+        if (source.constructor && this._CustomConverters[source.constructor.name]) {
+            return this._CustomConverters[source.constructor.name].Convert(source, schema, pathSegments);
+        }
+
+        // If source is already of the correct type (and not Any), return it
+        const sourceKind = GetDataKind(source);
+        if (
+            schema.Kind === DataKind.Any ||
+            (schema.Kind &&
+                schema.Kind === sourceKind &&
+                sourceKind !== DataKind.Object &&
+                sourceKind !== DataKind.Array &&
+                sourceKind !== DataKind.Map &&
+                sourceKind !== DataKind.Set)
+        ) {
+            return source;
         }
 
         switch (schema.Kind) {
-            case DataKinds.Number:
-                return this.convertToNumberWithDynamicSchemaNode(source, schema, pathSegments)
-            case DataKinds.Boolean:
-                return this.convertToBoolWithDynamicSchemaNode(source, schema, pathSegments)
-            case DataKinds.String:
-                return this.convertToStringWithDynamicSchemaNode(source, schema, pathSegments)
-            case DataKinds.Map:
-                return this.convertToMapWithDynamicSchemaNode(source, schema, pathSegments)
-            case DataKinds.Array:
-                return this.convertToArrayWithDynamicSchemaNode(source, schema, pathSegments)
-            case DataKinds.Set:
-                return this.convertToSetWithDynamicSchemaNode(source, schema, pathSegments)
-            case DataKinds.Object:
-                return this.convertToObjectWithDynamicSchemaNode(source, schema, pathSegments)
+            case DataKind.Number:
+                return this.convertToNumberWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.BigInt:
+                return this.convertToBigintWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.String:
+                return this.convertToStringWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Boolean:
+                return this.convertToBooleanWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Symbol:
+                return this.convertToSymbolWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Function:
+                return this.convertToFunctionWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Object:
+                return this.convertToPOJOWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Map:
+                return this.convertToMapWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Array:
+                return this.convertToArrayWithDynamicSchemaNode(source, schema, pathSegments);
+            case DataKind.Set:
+                return this.convertToSetWithDynamicSchemaNode(source, schema, pathSegments);
             default:
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'unsupported schema.Kind', schema, source, pathSegments)
-        }
-    }
-
-    private convertToNumberWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): number {
-        const FunctionName = 'convertToNumberWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.Number) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.Number}`, schema, source, pathSegments)
-        }
-
-        switch (typeof source) {
-            case 'number':
-                return source
-            case 'string':
-                const num = Number(source)
-                if (Number.isNaN(num)) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted string to number is not a number`, schema, source, pathSegments)
-                }
-                return num
-            default:
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'unsupported source.Kind for number conversion', schema, source, pathSegments)
-        }
-    }
-
-    private convertToBoolWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'convertToBoolWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.Boolean) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.Boolean}`, schema, source, pathSegments)
-        }
-
-        switch (typeof source) {
-            case 'boolean':
-                return source
-            case 'number':
-                return Boolean(source)
-            default:
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'unsupported source.Kind for bool conversion', schema, source, pathSegments)
-        }
-    }
-
-    private convertToStringWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): string {
-        const FunctionName = 'convertToStringWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.String) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.String}`, schema, source, pathSegments)
-        }
-
-        switch (typeof source) {
-            case 'string':
-                return source
-            case 'number':
-            case 'boolean':
-                return source.toString()
-            default:
-                try {
-                    return JSONstringify(source)
-                } catch (e) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'convert source to json string failed', schema, source, pathSegments, {cause: e})
-                }
-        }
-    }
-
-    private convertToObjectWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): any {
-        const FunctionName = 'convertToObjectWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.Object) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.Object}`, schema, source, pathSegments)
-        }
-
-        switch (typeof source) {
-            case 'string':
-                try {
-                    const deserializedData = JSON.parse(source)
-                    return this.convertToMapWithDynamicSchemaNode(deserializedData, schema, pathSegments)
-                } catch (e) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'convert source string from json to object failed', schema, source, pathSegments, {cause: e})
-                }
-            case 'object':
-                if (IsObjectLiteral(source)) {
-                    let newObject: any
+                throw Object.assign(
+                    new JsonError('unsupported schema.Kind', undefined, SchemaErrorCodes.DataConversionFailed),
                     {
-                        const defaultValue = IsFunction(schema.DefaultValue) ? schema.DefaultValue!() : {}
-                        if (IsObjectLiteral(defaultValue)) {
-                            newObject = defaultValue
-                        } else {
-                            newObject = {}
-                        }
+                        Data: { Schema: schema, Source: source, PathSegments: pathSegments }
                     }
-
-                    for (const [key, field] of Object.entries(source)) {
-                        const currentPathSegments = [...pathSegments, {Key: key, IsKey: true}]
-
-                        if (schema.ChildNodes?.has(key)) {
-                            const childSchema = schema.ChildNodes!.get(key)!
-
-                            if (childSchema instanceof DynamicSchema) {
-                                if (!IsArray(childSchema.ValidSchemaNodeKeys)) {
-                                    childSchema.ValidSchemaNodeKeys = []
-                                }
-                                if (IsMapAndNotEmpty(childSchema.Nodes)) {
-                                    for (const [childNodeKey, childNode] of childSchema.Nodes!) {
-                                        if (!IsObjectLiteral(childNode.AssociativeCollectionEntryKeySchema)) {
-                                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'childNode.AssociativeCollectionEntryKeySchema is not valid', schema, source, pathSegments)
-                                        }
-
-                                        try {
-                                            const convertedKey = this.Convert(key, childNode.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                            const convertedValue = this.convertToDynamicSchemaNode(field, childNode, currentPathSegments)
-                                            if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                                newObject[convertedKey] = convertedValue
-                                                childSchema.ValidSchemaNodeKeys!.push(childNodeKey)
-                                                break
-                                            }
-                                        } catch (e) {
-                                        }
-                                    }
-                                    if (childSchema.ValidSchemaNodeKeys!.length == 0) {
-                                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `failed to convert ${DataKinds.Object} entry with key ${key} against any DynamicSchema nodes`, schema, source, pathSegments)
-                                    }
-                                    continue
-                                } else {
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `no DynamicSchema nodes found for ${DataKinds.Object} key ${key}`, schema, source, pathSegments)
-                                }
-                            } else if (childSchema instanceof DynamicSchemaNode) {
-                                try {
-                                    let convertedKey: any
-                                    if (IsObjectLiteral(childSchema.AssociativeCollectionEntryKeySchema)) {
-                                        convertedKey = this.Convert(key, childSchema.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                    } else {
-                                        convertedKey = key
-                                    }
-                                    const convertedValue = this.convertToDynamicSchemaNode(field, childSchema, currentPathSegments)
-                                    if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                        newObject[convertedKey] = convertedValue
-                                        continue
-                                    }
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Object} key ${key} not valid`, schema, source, pathSegments)
-                                } catch (e) {
-                                    if (!childSchema.NullableOrUndefined) {
-                                        throw e
-                                    }
-                                    continue
-                                }
-                            } else {
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Nodes in Schema for ${DataKinds.Object} key ${key} empty`, schema, source, pathSegments)
-                            }
-                        }
-
-                        if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                            try {
-                                const convertedKey = this.Convert(key, schema.ChildNodesAssociativeCollectionEntriesKeySchema!, currentPathSegments)
-                                const convertedValue = this.Convert(field, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)
-                                if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                    newObject[convertedKey] = convertedValue
-                                    continue
-                                }
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Object} key ${key} not valid`, schema, source, pathSegments)
-                            } catch (e) {
-                                if (!schema.NullableOrUndefined) {
-                                    throw e
-                                }
-                                continue
-                            }
-                        }
-
-                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Schema for ${DataKinds.Object} key ${key} not found`, schema, source, pathSegments)
-                    }
-
-                    return newObject
-                }
-
-
-                if (IsMap(source)) {
-                    let newObject: any
-                    {
-                        const defaultValue = IsFunction(schema.DefaultValue) ? schema.DefaultValue!() : {}
-                        if (IsObjectLiteral(defaultValue)) {
-                            newObject = defaultValue
-                        } else {
-                            newObject = {}
-                        }
-                    }
-
-                    for (const [key, field] of source) {
-                        const currentPathSegments = [...pathSegments, {Key: key, IsKey: true}]
-
-                        if (schema.ChildNodes?.has(key)) {
-                            const childSchema = schema.ChildNodes!.get(key)!
-
-                            if (childSchema instanceof DynamicSchema) {
-                                if (!IsArray(childSchema.ValidSchemaNodeKeys)) {
-                                    childSchema.ValidSchemaNodeKeys = []
-                                }
-                                if (IsMapAndNotEmpty(childSchema.Nodes)) {
-                                    for (const [childNodeKey, childNode] of childSchema.Nodes!) {
-                                        try {
-                                            let convertedKey: any
-                                            if (IsObjectLiteral(childNode.AssociativeCollectionEntryKeySchema)) {
-                                                convertedKey = this.Convert(key, childNode.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                            } else {
-                                                convertedKey = key
-                                            }
-                                            const convertedValue = this.convertToDynamicSchemaNode(field, childNode, currentPathSegments)
-                                            if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                                newObject[convertedKey] = convertedValue
-                                                childSchema.ValidSchemaNodeKeys!.push(childNodeKey)
-                                                break
-                                            }
-                                        } catch (e) {
-                                        }
-                                    }
-                                    if (childSchema.ValidSchemaNodeKeys!.length == 0) {
-                                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `failed to convert ${DataKinds.Object} entry with key ${key} against any DynamicSchema nodes`, schema, source, pathSegments)
-                                    }
-                                    continue
-                                } else {
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `no DynamicSchema nodes found for ${DataKinds.Object} key ${key}`, schema, source, pathSegments)
-                                }
-                            } else if (childSchema instanceof DynamicSchemaNode) {
-                                try {
-                                    let convertedKey: any
-                                    if (IsObjectLiteral(childSchema.AssociativeCollectionEntryKeySchema)) {
-                                        convertedKey = this.Convert(key, childSchema.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                    } else {
-                                        convertedKey = key
-                                    }
-                                    const convertedValue = this.convertToDynamicSchemaNode(field, childSchema, currentPathSegments)
-                                    if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                        newObject[convertedKey] = convertedValue
-                                        continue
-                                    }
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Object} key ${key} not valid`, schema, source, pathSegments)
-                                } catch (e) {
-                                    if (!childSchema.NullableOrUndefined) {
-                                        throw e
-                                    }
-                                    continue
-                                }
-                            } else {
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Nodes in Schema for ${DataKinds.Object} key ${key} empty`, schema, source, pathSegments)
-                            }
-                        }
-
-                        if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                            try {
-                                const convertedKey = this.Convert(key, schema.ChildNodesAssociativeCollectionEntriesKeySchema!, currentPathSegments)
-                                const convertedValue = this.Convert(field, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)
-                                if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                    newObject[convertedKey] = convertedValue
-                                    continue
-                                }
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Object} key ${key} not valid`, schema, source, pathSegments)
-                            } catch (e) {
-                                if (!schema.NullableOrUndefined) {
-                                    throw e
-                                }
-                                continue
-                            }
-                        }
-
-                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Schema for ${DataKinds.Object} key ${key} not found`, schema, source, pathSegments)
-                    }
-
-                    return newObject
-                }
-
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'unsupported object type', schema, source, pathSegments)
+                );
         }
     }
 
-    private convertToMapWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): Map<any, any> {
-        const FunctionName = 'convertToMapWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.Map) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.Map}`, schema, source, pathSegments)
+    // array/slice
+    private convertToArrayWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Array) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Array', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
         }
 
-        switch (typeof source) {
-            case 'string':
-                try {
-                    const deserializedData = JSON.parse(source)
-                    return this.convertToMapWithDynamicSchemaNode(deserializedData, schema, pathSegments)
-                } catch (e) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'convert source string from json to object failed', schema, source, pathSegments, {cause: e})
-                }
-            case 'object':
-                if (IsObjectLiteral(source)) {
-                    let newMap: Map<any, any>
+        if (typeof source === 'string') {
+            let deserializedData: any;
+            try {
+                deserializedData = JSON.parse(source);
+            } catch (e) {
+                throw Object.assign(
+                    new JsonError(
+                        'failed to parse string as JSON array',
+                        undefined,
+                        SchemaErrorCodes.DataConversionFailed
+                    ),
                     {
-                        const defaultValue = IsFunction(schema.DefaultValue) ? schema.DefaultValue!() : new Map<any, any>()
-                        if (IsMap(defaultValue)) {
-                            newMap = defaultValue
-                        } else {
-                            newMap = new Map<any, any>()
-                        }
+                        Data: { Schema: schema, Source: source, PathSegments: pathSegments }
                     }
-
-                    for (const [key, field] of Object.entries(source)) {
-                        const currentPathSegments = [...pathSegments, {Key: key, IsKey: true}]
-
-                        if (schema.ChildNodes?.has(key)) {
-                            const childSchema = schema.ChildNodes!.get(key)!
-
-                            if (childSchema instanceof DynamicSchema) {
-                                if (!IsArray(childSchema.ValidSchemaNodeKeys)) {
-                                    childSchema.ValidSchemaNodeKeys = []
-                                }
-                                if (IsMapAndNotEmpty(childSchema.Nodes)) {
-                                    for (const [childNodeKey, childNode] of childSchema.Nodes!) {
-                                        if (!IsObjectLiteral(childNode.AssociativeCollectionEntryKeySchema)) {
-                                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'childNode.AssociativeCollectionEntryKeySchema is not valid', schema, source, pathSegments)
-                                        }
-
-                                        try {
-                                            const convertedKey = this.Convert(key, childNode.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                            const convertedValue = this.convertToDynamicSchemaNode(field, childNode, currentPathSegments)
-                                            if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                                newMap.set(convertedKey, convertedValue)
-                                                childSchema.ValidSchemaNodeKeys!.push(childNodeKey)
-                                                break
-                                            }
-                                        } catch (e) {
-                                        }
-                                    }
-                                    if (childSchema.ValidSchemaNodeKeys!.length == 0) {
-                                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `failed to convert ${DataKinds.Map} entry with key ${key} against any DynamicSchema nodes`, schema, source, pathSegments)
-                                    }
-                                    continue
-                                } else {
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `no DynamicSchema nodes found for ${DataKinds.Map} key ${key}`, schema, source, pathSegments)
-                                }
-                            } else if (childSchema instanceof DynamicSchemaNode) {
-                                if (!IsObjectLiteral(childSchema.AssociativeCollectionEntryKeySchema)) {
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'childSchema.AssociativeCollectionEntryKeySchema is not valid', schema, source, pathSegments)
-                                }
-
-                                try {
-                                    const convertedKey = this.Convert(key, childSchema.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                    const convertedValue = this.convertToDynamicSchemaNode(field, childSchema, currentPathSegments)
-                                    if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                        newMap.set(convertedKey, convertedValue)
-                                        continue
-                                    }
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Map} key ${key} not valid`, schema, source, pathSegments)
-                                } catch (e) {
-                                    if (!childSchema.NullableOrUndefined) {
-                                        throw e
-                                    }
-                                    continue
-                                }
-                            } else {
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Nodes in Schema for ${DataKinds.Map} key ${key} empty`, schema, source, pathSegments)
-                            }
-                        }
-
-                        if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                            try {
-                                const convertedKey = this.Convert(key, schema.ChildNodesAssociativeCollectionEntriesKeySchema!, currentPathSegments)
-                                const convertedValue = this.Convert(field, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)
-                                if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                    newMap.set(convertedKey, convertedValue)
-                                    continue
-                                }
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Map} key ${key} not valid`, schema, source, pathSegments)
-                            } catch (e) {
-                                if (!schema.NullableOrUndefined) {
-                                    throw e
-                                }
-                                continue
-                            }
-                        }
-
-                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Schema for ${DataKinds.Map} key ${key} not found`, schema, source, pathSegments)
-                    }
-
-                    return newMap
-                }
-
-                if (IsMap(source)) {
-                    let newMap: Map<any, any>
-                    {
-                        const defaultValue = IsFunction(schema.DefaultValue) ? schema.DefaultValue!() : new Map<any, any>()
-                        if (IsMap(defaultValue)) {
-                            newMap = defaultValue
-                        } else {
-                            newMap = new Map<any, any>()
-                        }
-                    }
-
-                    for (const [key, field] of source) {
-                        const currentPathSegments = [...pathSegments, {Key: key, IsKey: true}]
-
-                        if (schema.ChildNodes?.has(key)) {
-                            const childSchema = schema.ChildNodes!.get(key)!
-
-                            if (childSchema instanceof DynamicSchema) {
-                                if (!IsArray(childSchema.ValidSchemaNodeKeys)) {
-                                    childSchema.ValidSchemaNodeKeys = []
-                                }
-                                if (IsMapAndNotEmpty(childSchema.Nodes)) {
-                                    for (const [childNodeKey, childNode] of childSchema.Nodes!) {
-                                        if (!IsObjectLiteral(childNode.AssociativeCollectionEntryKeySchema)) {
-                                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'childNode.AssociativeCollectionEntryKeySchema is not valid', schema, source, pathSegments)
-                                        }
-
-                                        try {
-                                            const convertedKey = this.Convert(key, childNode.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                            const convertedValue = this.convertToDynamicSchemaNode(field, childNode, currentPathSegments)
-                                            if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                                newMap.set(convertedKey, convertedValue)
-                                                childSchema.ValidSchemaNodeKeys!.push(childNodeKey)
-                                                break
-                                            }
-                                        } catch (e) {
-                                        }
-                                    }
-                                    if (childSchema.ValidSchemaNodeKeys!.length == 0) {
-                                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `failed to convert ${DataKinds.Map} entry with key ${key} against any DynamicSchema nodes`, schema, source, pathSegments)
-                                    }
-                                    continue
-                                } else {
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `no DynamicSchema nodes found for ${DataKinds.Map} key ${key}`, schema, source, pathSegments)
-                                }
-                            } else if (childSchema instanceof DynamicSchemaNode) {
-                                if (!IsObjectLiteral(childSchema.AssociativeCollectionEntryKeySchema)) {
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'childSchema.AssociativeCollectionEntryKeySchema is not valid', schema, source, pathSegments)
-                                }
-
-                                try {
-                                    const convertedKey = this.Convert(key, childSchema.AssociativeCollectionEntryKeySchema!, currentPathSegments)
-                                    const convertedValue = this.convertToDynamicSchemaNode(field, childSchema, currentPathSegments)
-                                    if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                        newMap.set(convertedKey, convertedValue)
-                                        continue
-                                    }
-                                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Map} key ${key} not valid`, schema, source, pathSegments)
-                                } catch (e) {
-                                    if (!childSchema.NullableOrUndefined) {
-                                        throw e
-                                    }
-                                    continue
-                                }
-                            } else {
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Nodes in Schema for ${DataKinds.Map} key ${key} empty`, schema, source, pathSegments)
-                            }
-                        }
-
-                        if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                            try {
-                                const convertedKey = this.Convert(key, schema.ChildNodesAssociativeCollectionEntriesKeySchema!, currentPathSegments)
-                                const convertedValue = this.Convert(field, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)
-                                if (!IsNullOrUndefined(convertedValue) && !IsNullOrUndefined(convertedKey)) {
-                                    newMap.set(convertedKey, convertedValue)
-                                    continue
-                                }
-                                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `converted ${DataKinds.Map} key ${key} not valid`, schema, source, pathSegments)
-                            } catch (e) {
-                                if (!schema.NullableOrUndefined) {
-                                    throw e
-                                }
-                                continue
-                            }
-                        }
-
-                        throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `Schema for ${DataKinds.Map} key ${key} not found`, schema, source, pathSegments)
-                    }
-
-                    return newMap
-                }
-
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'unsupported object type', schema, source, pathSegments)
-            default:
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `unsupported source.Kind for ${DataKinds.Map} conversion`, schema, source, pathSegments)
-        }
-    }
-
-    private convertToSetWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): Set<any> {
-        const FunctionName = 'convertToSetWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.Set) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.Set}`, schema, source, pathSegments)
+                );
+            }
+            return this.convertToArrayWithDynamicSchemaNode(deserializedData, schema, pathSegments);
         }
 
-        switch (typeof source) {
-            case 'string':
-                try {
-                    const deserializedData = JSON.parse(source)
-                    return this.convertToSetWithDynamicSchemaNode(deserializedData, schema, pathSegments)
-                } catch (e) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'convert source string from json to object failed', schema, source, pathSegments, {cause: e})
+        if (!IsArray(source) && !IsSet(source)) {
+            throw Object.assign(
+                new JsonError('source is not an array or set', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
                 }
-            case 'object':
-                if (!IsObjectLiteral(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema for ${DataKinds.Set} entries not found`, schema, source, pathSegments)
-                }
+            );
+        }
 
-                let newSet: Set<any>
-            {
-                const defaultValue = IsFunction(schema.DefaultValue) ? schema.DefaultValue!() : new Set<any>()
-                if (IsSet(defaultValue)) {
-                    newSet = defaultValue
-                } else {
-                    newSet = new Set<any>()
-                }
+        const newArray: any[] = schema.DefaultValue ? schema.DefaultValue() : [];
+        const iterator = IsSet(source) ? (source as Set<any>).values() : source;
+
+        let i = 0;
+        for (const item of iterator) {
+            const currentPathSegments = [...pathSegments, Object.assign(new CollectionMemberSegment(), { Index: i })];
+
+            let currentSchema = schema.ChildNodesLinearCollectionElementsSchema;
+            if (schema.ChildNodes && schema.ChildNodes[String(i)]) {
+                currentSchema = schema.ChildNodes[String(i)];
             }
 
-                if (IsArray(source)) {
-                    for (let i = 0; i < source.length; i++) {
-                        const currentPathSegments = [...pathSegments, {Index: i, IsIndex: true}]
-
-                        const result = this.Convert(source[i], schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)
-                        if (!IsNullOrUndefined(result)) {
-                            newSet.add(result)
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `conversion of source ${DataKinds.Array} element at index ${i} to ${DataKinds.Set} entry returned null or undefined`, schema, source, pathSegments)
-                        }
+            if (!currentSchema) {
+                throw Object.assign(
+                    new JsonError('no schema for array element', undefined, SchemaErrorCodes.DataConversionFailed),
+                    {
+                        Data: { Schema: schema, Source: item, PathSegments: currentPathSegments }
                     }
-                    return newSet
+                );
+            }
+
+            const convertedItem = this.RecursiveConvert(item, currentSchema, currentPathSegments);
+            newArray.push(convertedItem);
+            i++;
+        }
+
+        return newArray;
+    }
+
+    private convertToMapWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Map) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Map', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        if (typeof source === 'string') {
+            let deserializedData: any;
+            try {
+                deserializedData = JSON.parse(source);
+            } catch (e) {
+                throw Object.assign(
+                    new JsonError(
+                        'failed to parse string as JSON map',
+                        undefined,
+                        SchemaErrorCodes.DataConversionFailed
+                    ),
+                    {
+                        Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                    }
+                );
+            }
+            return this.convertToMapWithDynamicSchemaNode(deserializedData, schema, pathSegments);
+        }
+
+        const newMap = schema.DefaultValue ? schema.DefaultValue() : new Map<any, any>();
+
+        let entries: [any, any][] = [];
+        if (IsMap(source)) {
+            entries = Array.from((source as Map<any, any>).entries());
+        } else if (IsObject(source)) {
+            entries = Object.entries(source);
+        } else {
+            throw Object.assign(
+                new JsonError('source is not a map or object', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        for (const [key, value] of entries) {
+            let convertedKey = key;
+            if (schema.ChildNodesAssociativeCollectionEntriesKeySchema) {
+                convertedKey = this.RecursiveConvert(
+                    key,
+                    schema.ChildNodesAssociativeCollectionEntriesKeySchema,
+                    pathSegments
+                );
+            } else {
+                convertedKey = String(key);
+            }
+
+            const currentPathSegments = [
+                ...pathSegments,
+                Object.assign(new CollectionMemberSegment(), { Key: String(convertedKey), IsKey: true })
+            ];
+
+            let valueSchema: Schema | undefined;
+            if (schema.ChildNodes && schema.ChildNodes[String(convertedKey)]) {
+                valueSchema = schema.ChildNodes[String(convertedKey)];
+            } else if (schema.ChildNodesAssociativeCollectionEntriesValueSchema) {
+                valueSchema = schema.ChildNodesAssociativeCollectionEntriesValueSchema;
+            }
+
+            if (!valueSchema) {
+                throw Object.assign(
+                    new JsonError(
+                        `no schema found for map value at key ${convertedKey}`,
+                        undefined,
+                        SchemaErrorCodes.DataConversionFailed
+                    ),
+                    {
+                        Data: { Schema: schema, Source: value, PathSegments: currentPathSegments }
+                    }
+                );
+            }
+
+            const convertedValue = this.RecursiveConvert(value, valueSchema, currentPathSegments);
+            newMap.set(convertedKey, convertedValue);
+        }
+
+        return newMap;
+    }
+
+    private convertToSetWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Set) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Set', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        const arrayResult = this.convertToArrayWithDynamicSchemaNode(
+            source,
+            Object.assign(new DynamicSchemaNode(), schema, { Kind: DataKind.Array }),
+            pathSegments
+        );
+        return new Set(arrayResult);
+    }
+
+    // struct
+    private convertToPOJOWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Object) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Object', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        if (typeof source === 'string') {
+            let deserializedData: any;
+            try {
+                deserializedData = JSON.parse(source);
+            } catch (e) {
+                throw Object.assign(
+                    new JsonError(
+                        'failed to parse string as JSON object',
+                        undefined,
+                        SchemaErrorCodes.DataConversionFailed
+                    ),
+                    {
+                        Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                    }
+                );
+            }
+            return this.convertToPOJOWithDynamicSchemaNode(deserializedData, schema, pathSegments);
+        }
+
+        if (!IsObject(source) && !IsMap(source)) {
+            throw Object.assign(
+                new JsonError('source is not an object or map', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: {
+                        Schema: schema,
+                        Source: source,
+                        PathSegments: pathSegments,
+                        Message: 'source is not an object or map'
+                    }
+                }
+            );
+        }
+
+        const target: any = schema.DefaultValue ? schema.DefaultValue() : {};
+
+        // Strict check: Ensure all source keys exist in schema
+        if (IsMap(source)) {
+            for (const key of (source as Map<any, any>).keys()) {
+                if (schema.ChildNodes && !Object.prototype.hasOwnProperty.call(schema.ChildNodes, String(key))) {
+                    throw Object.assign(
+                        new JsonError(
+                            `field ${String(key)} not found in schema`,
+                            undefined,
+                            SchemaErrorCodes.DataConversionFailed
+                        ),
+                        {
+                            Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                        }
+                    );
+                }
+            }
+        } else {
+            for (const key of Object.keys(source)) {
+                if (schema.ChildNodes && !Object.prototype.hasOwnProperty.call(schema.ChildNodes, key)) {
+                    throw Object.assign(
+                        new JsonError(
+                            `field ${key} not found in schema`,
+                            undefined,
+                            SchemaErrorCodes.DataConversionFailed
+                        ),
+                        {
+                            Data: {
+                                Schema: schema,
+                                Source: source,
+                                PathSegments: pathSegments,
+                                Message: `field ${key} not found in schema`
+                            }
+                        }
+                    );
+                }
+            }
+        }
+
+        if (schema.ChildNodes) {
+            for (const key in schema.ChildNodes) {
+                const childSchema = schema.ChildNodes[key];
+                const currentPathSegments = [
+                    ...pathSegments,
+                    Object.assign(new CollectionMemberSegment(), { Key: key, IsKey: true })
+                ];
+
+                let sourceValue: any;
+                let found = false;
+
+                if (IsMap(source)) {
+                    if ((source as Map<any, any>).has(key)) {
+                        sourceValue = (source as Map<any, any>).get(key);
+                        found = true;
+                    }
+                } else {
+                    if (source && Object.prototype.hasOwnProperty.call(source, key)) {
+                        sourceValue = (source as any)[key];
+                        found = true;
+                    }
                 }
 
-                if (IsSet(source)) {
-                    let i = 0
-                    for (const entry of source as Set<any>) {
-                        const currentPathSegments = [...pathSegments, {Index: i, IsIndex: true}]
-
-                        const result = this.Convert(entry, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)
-                        if (!IsNullOrUndefined(result)) {
-                            newSet.add(result)
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `conversion of source ${DataKinds.Set} entry at index ${i} to ${DataKinds.Set} entry returned null or undefined`, schema, source, pathSegments)
-                        }
-                        i++
+                if (found) {
+                    const convertedValue = this.RecursiveConvert(sourceValue, childSchema, currentPathSegments);
+                    target[key] = convertedValue;
+                } else {
+                    if (
+                        childSchema instanceof DynamicSchemaNode &&
+                        !childSchema.Nullable &&
+                        !childSchema.DefaultValue
+                    ) {
+                        throw Object.assign(
+                            new JsonError(
+                                `missing required field ${key}`,
+                                undefined,
+                                SchemaErrorCodes.DataConversionFailed
+                            ),
+                            {
+                                Data: { Schema: schema, Source: source, PathSegments: currentPathSegments }
+                            }
+                        );
                     }
-                    return newSet
                 }
+            }
+        }
 
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `unsupported source object`, schema, source, pathSegments)
-            default:
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `unsupported source.Kind for ${DataKinds.Set} conversion`, schema, source, pathSegments)
+        return target;
+    }
+
+    private convertToNumberWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Number) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Number', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        if (typeof source === 'number') return source;
+        if (typeof source === 'boolean') return source ? 1 : 0;
+        if (typeof source === 'string') {
+            const n = Number(source);
+            if (!isNaN(n)) return n;
+        }
+
+        throw Object.assign(
+            new JsonError('failed to convert to number', undefined, SchemaErrorCodes.DataConversionFailed),
+            {
+                Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+            }
+        );
+    }
+
+    private convertToStringWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.String) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not String', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        if (typeof source === 'string') return source;
+        if (typeof source === 'symbol') return source.description || source.toString();
+        if (typeof source === 'object') {
+            try {
+                return JSON.stringify(source);
+            } catch {
+                return String(source);
+            }
+        }
+        return String(source);
+    }
+
+    private convertToBooleanWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Boolean) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Boolean', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
+        }
+
+        if (typeof source === 'boolean') return source;
+        if (typeof source === 'number') return source !== 0;
+        if (typeof source === 'string') {
+            const lower = source.toLowerCase();
+            if (lower === 'true') return true;
+            if (lower === 'false') return false;
+            const n = Number(source);
+            if (!isNaN(n)) return n !== 0;
+        }
+
+        throw Object.assign(
+            new JsonError('failed to convert to boolean', undefined, SchemaErrorCodes.DataConversionFailed),
+            {
+                Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+            }
+        );
+    }
+
+    private convertToBigintWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        try {
+            return BigInt(source);
+        } catch (e) {
+            throw Object.assign(
+                new JsonError('failed to convert to BigInt', e as Error, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
         }
     }
 
-    private convertToArrayWithDynamicSchemaNode(source: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): any[] {
-        const FunctionName = 'convertToArrayWithDynamicSchemaNode'
-
-        if (schema.Kind !== DataKinds.Array) {
-            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema.Kind is not ${DataKinds.Array}`, schema, source, pathSegments)
+    private convertToSymbolWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Symbol) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Symbol', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+                }
+            );
         }
 
-        switch (typeof source) {
-            case 'string':
-                try {
-                    const deserializedData = JSON.parse(source)
-                    return this.convertToArrayWithDynamicSchemaNode(deserializedData, schema, pathSegments)
-                } catch (e) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, 'convert source string from json to object failed', schema, source, pathSegments, {cause: e})
-                }
-            case 'object':
-                if (!IsObjectLiteral(schema.ChildNodesLinearCollectionElementsSchema)) {
-                    throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `schema for ${DataKinds.Array} elements not found`, schema, source, pathSegments)
-                }
+        if (typeof source === 'symbol') return source;
+        if (typeof source === 'string') return Symbol.for(source);
 
-                let newArray: any[]
+        throw Object.assign(
+            new JsonError('failed to convert to Symbol', undefined, SchemaErrorCodes.DataConversionFailed),
             {
-                const defaultValue = IsFunction(schema.DefaultValue) ? schema.DefaultValue!() : []
-                if (IsArray(defaultValue)) {
-                    newArray = defaultValue
-                } else {
-                    newArray = []
-                }
+                Data: { Schema: schema, Source: source, PathSegments: pathSegments }
             }
+        );
+    }
 
-                if (IsArray(source)) {
-                    for (let i = 0; i < source.length; i++) {
-                        const currentPathSegments = [...pathSegments, {Index: i, IsIndex: true}]
-
-                        const result = this.Convert(source[i], schema.ChildNodesLinearCollectionElementsSchema!, currentPathSegments)
-                        if (!IsNullOrUndefined(result)) {
-                            newArray.push(result)
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `conversion of source ${DataKinds.Array} element at index ${i} to ${DataKinds.Array} element returned null or undefined`, schema, source, pathSegments)
-                        }
-                    }
-                    return newArray
+    private convertToFunctionWithDynamicSchemaNode(
+        source: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): any {
+        if (schema.Kind !== DataKind.Function) {
+            throw Object.assign(
+                new JsonError('schema.Kind is not Function', undefined, SchemaErrorCodes.DataConversionFailed),
+                {
+                    Data: { Schema: schema, Source: source, PathSegments: pathSegments }
                 }
-
-                if (IsSet(source)) {
-                    let i = 0
-                    for (const entry of source as Set<any>) {
-                        const currentPathSegments = [...pathSegments, {Index: i, IsIndex: true}]
-
-                        const result = this.Convert(entry, schema.ChildNodesLinearCollectionElementsSchema!, currentPathSegments)
-                        if (!IsNullOrUndefined(result)) {
-                            newArray.push(result)
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `conversion of source ${DataKinds.Set} entry at index ${i} to ${DataKinds.Array} element returned null or undefined`, schema, source, pathSegments)
-                        }
-                        i++
-                    }
-                    return newArray
-                }
-
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `unsupported source object`, schema, source, pathSegments)
-            default:
-                throw new SchemaError(SchemaErrorCodes.DataConversionFailed, FunctionName, `unsupported source.Kind for ${DataKinds.Array} conversion`, schema, source, pathSegments)
+            );
         }
+
+        if (typeof source === 'function') return source;
+
+        throw Object.assign(
+            new JsonError('failed to convert to Function', undefined, SchemaErrorCodes.DataConversionFailed),
+            {
+                Data: { Schema: schema, Source: source, PathSegments: pathSegments }
+            }
+        );
     }
 }
-

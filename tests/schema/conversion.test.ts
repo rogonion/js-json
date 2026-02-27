@@ -1,224 +1,273 @@
-import type {TestData} from '@internal'
-import {Conversion, type Converter, type Converters, DataKinds, DynamicSchemaNode, type Schema} from '@schema'
-import {DynamicUserSchema, User, UserWithAddress, UserWithAddressSchema} from '../misc.ts'
-import {describe, expect, it} from 'vitest'
-import {CollectionMemberSegment, JsonpathKeyRoot} from '@path'
-import {JSONstringify} from '@core'
-import {AreEqual} from '@object'
+import { TestData } from '@internal';
+import { AreEqual } from '@object';
+import { Conversion, DataKind, DynamicSchemaNode, type Converters, type Schema } from '@schema';
+import { describe, expect, it } from 'vitest';
+import {
+    Address,
+    AddressSchema,
+    DynamicUserSchema,
+    User,
+    UserProfile2,
+    UserProfile2Schema,
+    UserWithAddress,
+    UserWithAddressSchema,
+    UserWithUuidId,
+    UserWithUuidIdSchema,
+    UUID
+} from './misc';
 
-describe('conversion', () => {
-    const areEqual = new AreEqual()
+class ConversionData extends TestData {
+    public Schema!: Schema;
+    public Source: any;
+    public Converters?: Converters;
+    public ExpectedOk: boolean = true;
+    public ExpectedData: any;
+}
 
-    it.each(TestData)('Expect $TestTitle to return $ExpectedOk', (testData) => {
-        let result: any
-        try {
-            const conversion: Converter = new Conversion(testData.Converters)
-            result = conversion.Convert(testData.Source, testData.Schema, [CollectionMemberSegment.create().WithKey(JsonpathKeyRoot).WithIsKeyRoot(true).build()])
-            expect(areEqual.AreEqual(result, testData.ExpectedData)).toBe(testData.ExpectedOk)
-        } catch (e) {
-            if (testData.ExpectedOk) {
-                console.log(
-                    'Test Title:', testData.TestTitle, '\n',
-                    'expected ok=', testData.ExpectedOk, '\n',
-                    'schema=', JSONstringify(testData.Schema), '\n',
-                    'source=', JSONstringify(testData.Source), '\n',
-                    'result=', JSONstringify(result), '\n',
-                    'ExpectedData=', JSONstringify(testData.ExpectedData), '\n'
-                )
-                throw e
-            }
+describe('Schema Conversion', () => {
+    const areEqual = new AreEqual();
+
+    it.each(testData)('$TestTitle', (data) => {
+        const converter = new Conversion();
+        if (data.Converters) {
+            converter.CustomConverters = data.Converters;
         }
-    })
-})
 
-interface ConversionData extends TestData {
-    Schema: Schema
-    Source: any
-    Converters?: Converters
-    ExpectedOk: boolean
-    ExpectedData: any
-}
+        let err: any;
+        let res: any;
 
-class Custom {
-    public One: boolean = false
-    public Two?: any[]
-    public Three: string = ''
-    public Four: number = 0
-}
+        try {
+            res = converter.Convert(data.Source, data.Schema);
+        } catch (e) {
+            err = e;
+        }
 
-const TestData: ConversionData[] = [
-    {
+        if (data.ExpectedOk && err) {
+            console.error(
+                data.TestTitle,
+                '\n',
+                'expected ok=',
+                data.ExpectedOk,
+                'got error=',
+                err,
+                '\n',
+                'schema=',
+                JSON.stringify(data.Schema),
+                '\n',
+                'data=',
+                JSON.stringify(data.Source),
+                '\n'
+            );
+            throw err;
+        } else if (!data.ExpectedOk && !err) {
+            throw new Error(`Expected error but got success for ${data.TestTitle}`);
+        } else if (data.ExpectedOk) {
+            expect(areEqual.AreEqual(res, data.ExpectedData)).toBe(true);
+        }
+    });
+
+    it('TestSchema_ConvertStoreResultInTypedDestination', () => {
+        const cvt = new Conversion();
+
+        const schema = new DynamicSchemaNode({
+            Kind: DataKind.BigInt
+        });
+
+        // In TS we return the value, we don't write to a pointer like Go.
+        // We verify the type and value.
+        const numberCast = cvt.Convert(0.0, schema);
+        expect(typeof numberCast).toBe('bigint');
+        expect(numberCast).toBe(0n);
+
+        const addressSchema = AddressSchema();
+        const address = cvt.Convert({ Street: 'Turnkit Boulevard', City: 'NewYork', ZipCode: '1234' }, addressSchema);
+        expect(address).toEqual(new Address('Turnkit Boulevard', 'NewYork', '1234'));
+    });
+});
+
+const helloFunc = () => 'hello';
+
+const testData: ConversionData[] = [
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 1: Map to User Object (Dynamic Schema)',
         Schema: DynamicUserSchema(),
         Source: {
-            'ID': '1',
-            'Name': 'John Doe',
-            'Email': 'john.doe@email.com'
+            Name: 'Bob',
+            Address: {
+                Street: '123 Main St',
+                City: 'Anytown'
+            }
         },
         ExpectedOk: true,
-        ExpectedData: (() => {
-            const x = new User()
-            x.ID = 1
-            x.Name = 'John Doe'
-            x.Email = 'john.doe@email.com'
-            return x
-        })()
-    },
-    {
-        Schema: DynamicSchemaNode.create()
-            .withKind(DataKinds.Map)
-            .withTypeOf(typeof new Map())
-            .withChildNodesAssociativeCollectionEntriesKeySchema(DynamicSchemaNode.create()
-                .withKind(DataKinds.Number)
-                .withTypeOf(typeof 0)
-                .build())
-            .withChildNodesAssociativeCollectionEntriesValueSchema(DynamicSchemaNode.create()
-                .withKind(DataKinds.Number)
-                .withTypeOf(typeof 0)
-                .build())
-            .build(),
+        ExpectedData: new UserWithAddress('Bob', new Address('123 Main St', 'Anytown', null))
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 1b: Map to User Object (Dynamic Schema - Non-default node)',
+        Schema: DynamicUserSchema(),
+        Source: {
+            ID: 1,
+            Name: 'John Doe',
+            Email: 'john.doe@email.com'
+        },
+        ExpectedOk: true,
+        ExpectedData: new User(1, 'John Doe', 'john.doe@email.com')
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 2: Map to Map (String keys to Number keys/values)',
+        Schema: new DynamicSchemaNode({
+            Kind: DataKind.Map,
+            ChildNodesAssociativeCollectionEntriesKeySchema: new DynamicSchemaNode({ Kind: DataKind.Number }),
+            ChildNodesAssociativeCollectionEntriesValueSchema: new DynamicSchemaNode({ Kind: DataKind.Number })
+        }),
         Source: {
             '1': '1',
             '2': '2',
             '3': '3'
         },
         ExpectedOk: true,
-        ExpectedData: new Map<number, number>([[1, 1], [2, 2], [3, 3]])
-    },
-    {
-        Schema: DynamicSchemaNode.create().withKind(DataKinds.Number).withTypeOf(typeof 0).build(),
+        ExpectedData: new Map([
+            [1, 1],
+            [2, 2],
+            [3, 3]
+        ])
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 3: String to Int',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.Number }),
         Source: '123',
         ExpectedOk: true,
         ExpectedData: 123
-    },
-    {
-        Schema: DynamicSchemaNode.create().withKind(DataKinds.String).withTypeOf(typeof '').build(),
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 4: Int to String',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.String }),
         Source: 456,
         ExpectedOk: true,
         ExpectedData: '456'
-    },
-    {
-        Schema: DynamicSchemaNode.create().withKind(DataKinds.Boolean).withTypeOf(typeof true).build(),
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 5: Float to Int (Number)',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.Number }),
+        Source: 123.45,
+        ExpectedOk: true,
+        ExpectedData: 123.45 // JS Number is float, so it preserves decimals
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 6: String to Float',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.Number }),
+        Source: '25.7',
+        ExpectedOk: true,
+        ExpectedData: 25.7
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 7: Int to Bool',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.Boolean }),
         Source: 25,
         ExpectedOk: true,
         ExpectedData: true
-    },
-    {
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 8: Nested Map to Object',
         Schema: UserWithAddressSchema(),
-        Source: new Map<string, any>([
-            ['Name', 'Bob'],
-            ['Address', {
-                'Street': '123 Main St',
-                'City': 'Anytown'
-            }]
-        ]),
-        ExpectedOk: true,
-        ExpectedData: (() => {
-            const x = new UserWithAddress()
-            x.Name = 'Bob'
-            x.Address.Street = '123 Main St'
-            x.Address.City = 'Anytown'
-            return x
-        })()
-    },
-    {
-        Schema: DynamicSchemaNode.create()
-            .withKind(DataKinds.Object)
-            .withTypeOf(typeof new Custom())
-            .withDefaultValue(() => {
-                return new Custom()
-            })
-            .withChildNodes(
-                new Map<string, Schema>([
-                    ['One', DynamicSchemaNode.create().withKind(DataKinds.Boolean).withTypeOf(typeof true).build()],
-                    ['Two', DynamicSchemaNode.create()
-                        .withKind(DataKinds.Array)
-                        .withTypeOf(typeof [1, '2'])
-                        .withChildNodesLinearCollectionElementsSchema(DynamicSchemaNode.create().withKind(DataKinds.Any).build())
-                        .build()
-                    ],
-                    ['Three', DynamicSchemaNode.create().withKind(DataKinds.String).withTypeOf(typeof '').build()],
-                    ['Four', DynamicSchemaNode.create().withKind(DataKinds.Number).withTypeOf(typeof 0).build()]
-                ])
-            )
-            .build(),
         Source: {
-            'One': true,
-            'Two': [1, 2, 3],
-            'Three': 'three',
-            'Four': '4'
+            Name: 'Bob',
+            Address: {
+                Street: '123 Main St',
+                City: 'Anytown'
+            }
         },
         ExpectedOk: true,
-        ExpectedData: (() => {
-            const x = new Custom()
-            x.One = true
-            x.Two = [1, 2, 3]
-            x.Three = 'three'
-            x.Four = 4
-            return x
-        })()
-    },
-    {
-        Schema: DynamicSchemaNode.create()
-            .withKind(DataKinds.Object)
-            .withTypeOf(typeof {})
-            .withChildNodesAssociativeCollectionEntriesKeySchema(DynamicSchemaNode.create().withKind(DataKinds.String).withTypeOf(typeof '').build())
-            .withChildNodesAssociativeCollectionEntriesValueSchema(DynamicSchemaNode.create().withKind(DataKinds.Any).build())
-            .build(),
-        Source: (() => {
-            const x = new Custom()
-            x.One = true
-            x.Two = [1, 2, 3]
-            x.Three = 'three'
-            x.Four = 4
-            return x
-        })(),
+        ExpectedData: new UserWithAddress('Bob', new Address('123 Main St', 'Anytown', null))
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 9: Array to Slice (Array)',
+        Schema: new DynamicSchemaNode({
+            Kind: DataKind.Array,
+            ChildNodesLinearCollectionElementsSchema: new DynamicSchemaNode({ Kind: DataKind.Any })
+        }),
+        Source: [1, 'two', true],
+        ExpectedOk: true,
+        ExpectedData: [1, 'two', true]
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 11: Custom Object Structure',
+        Schema: new DynamicSchemaNode({
+            Kind: DataKind.Object,
+            ChildNodes: {
+                One: new DynamicSchemaNode({ Kind: DataKind.Boolean }),
+                Two: new DynamicSchemaNode({
+                    Kind: DataKind.Array,
+                    ChildNodesLinearCollectionElementsSchema: new DynamicSchemaNode({ Kind: DataKind.Any })
+                }),
+                Three: new DynamicSchemaNode({ Kind: DataKind.String }),
+                Four: new DynamicSchemaNode({ Kind: DataKind.Number })
+            }
+        }),
+        Source: {
+            One: true,
+            Two: [1, 2, 3],
+            Three: 'three',
+            Four: '4'
+        },
         ExpectedOk: true,
         ExpectedData: {
-            'One': true,
-            'Two': [1, 2, 3],
-            'Three': 'three',
-            'Four': 4
+            One: true,
+            Two: [1, 2, 3],
+            Three: 'three',
+            Four: 4
         }
-    },
-    {
-        Schema: DynamicSchemaNode.create()
-            .withKind(DataKinds.Set)
-            .withTypeOf(typeof new Set<number>())
-            .withDefaultValue(() => {
-                return new Set<number>()
-            })
-            .withChildNodesAssociativeCollectionEntriesValueSchema(DynamicSchemaNode.create().withKind(DataKinds.Number).withTypeOf(typeof 0).build())
-            .build(),
-        Source: [1, 2, 3, 1, 2, 3],
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 13: Convert JSON string directly to Object',
+        Schema: UserProfile2Schema(),
+        Source: `{"Name": "James Bond", "Age": 40, "Country": "UK", "Occupation": "Agent"}`,
         ExpectedOk: true,
-        ExpectedData: new Set<number>([1, 2, 3])
-    },
-    {
-        Schema: DynamicSchemaNode.create()
-            .withKind(DataKinds.Array)
-            .withTypeOf(typeof [1, '2'])
-            .withChildNodesLinearCollectionElementsSchema(DynamicSchemaNode.create().withKind(DataKinds.Any).build())
-            .build(),
-        Source: new Set<any>([
-            {1: 1},
-            2,
-            {
-                'One': true,
-                'Two': [1, 2, 3],
-                'Three': 'three',
-                'Four': 4
+        ExpectedData: new UserProfile2('James Bond', 40, 'UK', 'Agent')
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 15: Convert using Custom Converter (UUID string to UUID class)',
+        Schema: UserWithUuidIdSchema(),
+        Source: {
+            ID: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+            Profile: {
+                Name: 'Alice',
+                Age: 30,
+                Country: 'Wonderland',
+                Occupation: 'Explorer'
             }
-        ]),
+        },
         ExpectedOk: true,
-        ExpectedData: [
-            {1: 1},
-            2,
-            {
-                'One': true,
-                'Two': [1, 2, 3],
-                'Three': 'three',
-                'Four': 4
-            }
-        ]
-    }
-]
+        ExpectedData: new UserWithUuidId(
+            new UUID('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'),
+            new UserProfile2('Alice', 30, 'Wonderland', 'Explorer')
+        )
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 16: String to BigInt',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.BigInt }),
+        Source: '9007199254740991',
+        ExpectedOk: true,
+        ExpectedData: 9007199254740991n
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 17: Number to BigInt',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.BigInt }),
+        Source: 123,
+        ExpectedOk: true,
+        ExpectedData: 123n
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 18: String to Symbol',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.Symbol }),
+        Source: 'mySymbol',
+        ExpectedOk: true,
+        ExpectedData: Symbol.for('mySymbol')
+    }),
+    Object.assign(new ConversionData(), {
+        TestTitle: 'Test Case 19: Function passthrough',
+        Schema: new DynamicSchemaNode({ Kind: DataKind.Function }),
+        Source: helloFunc,
+        ExpectedOk: true,
+        ExpectedData: helloFunc
+    })
+];

@@ -1,115 +1,206 @@
 # js-json
 
-A library for working with objects i.e, data whose layout and structure resembles `JSON`'s tree structure.
+A library for manipulating dynamic, JSON-like data structures in JavaScript. It provides tools for traversing, modifying, validating, and converting deeply nested objects (maps, sets, arrays, classes) using JSONPath.
 
-An object can be a primitive value or a large and deeply nested collection.
+## Features
 
-Particularly useful for:
+- **Dynamic Object Manipulation**: Get, Set, Delete, and Iterate over values in deeply nested structures using JSONPath.
+- **Schema Validation**: Define schemas for your data and validate dynamic objects against them at runtime.
+- **Type Conversion**: Convert loosely typed data (e.g., `Record<string, any>`) into strongly typed structures (classes, maps, sets) based on schema definitions.
+- **Deserialization**: Helpers for loading JSON and YAML data directly into schema-validated structures.
+- **JSONPath Support**: Supports dot notation, recursive descent (`..`), wildcards (`*`), unions (`['a','b']`), and array slicing (`[start:end:step]`).
 
-- Deeply nested objects.
-- Objects whose type is dynamic.
-- Objects whose type is discoverable at runtime only.
+## Prerequisites
 
-Relies on the language's reflection capabilities.
+<table>
+  <thead>
+    <tr>
+      <th>Tool</th>
+      <th>Description</th>
+      <th>Link</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Node.js</td>
+      <td>JavaScript runtime.</td>
+      <td><a href="https://nodejs.org/">Official Website</a></td>
+    </tr>
+    <tr>
+      <td>Task</td>
+      <td>
+        <p>Task runner / build tool.</p> 
+        <p>You can use the provided shell script <a href="taskw">taskw</a> that automatically downloads the binary and installs it in the <code>.task</code> folder.</p>
+      </td>
+      <td><a href="https://taskfile.dev/">Official Website</a></td>
+    </tr>
+    <tr>
+      <td>Docker / Podman</td>
+      <td>Optional container engine for isolated development environment.</td>
+      <td><a href="https://www.docker.com/">Docker</a> / <a href="https://podman.io/">Podman</a></td>
+    </tr>
+  </tbody>
+</table>
 
-The [core set of modules](src/object) for manipulating an object using `JSONPath` are as follows:
-
-- Set value(s) in an object.
-- Get value(s) in an object.
-- Delete value(s) in an object.
-- Loop through each value(s) in an object (For Each).
-- Check if two values are equal.
-
-## Sections
-
-- [JSONPath](#jsonpath)
-- [Supported data type](#supported-data-types)
-- [Additional modules](#additional-modules)
-- [Usage](#usage)
-
-## Usage
-
-The library uses [vite](https://vite.dev/) and [pnpm](https://pnpm.io/) as the core build and dependency management
-foundation.
-
-### Install dependencies.
-
-```shell
-pnpm install
-```
-
-### Build
-
-```shell
-pnpm run build
-```
-
-### Test
+## Installation
 
 ```shell
-pnpm run test
-
-# with watch
-pnpm run test:watch
+npm install @rogonion/js-json
 ```
 
-## JSONPath
+## Environment Setup
 
-As defined [here](https://en.wikipedia.org/wiki/JSONPath), it is a query language for querying values JSON-style.
+This project uses `Taskfile` to manage the development environment and tasks.
 
-The module aims to extract path segments from a JSONPath string.
+The below command lists all tasks available in the project:
 
-The module aims to support the entirety of the JSONPath [spec](https://www.rfc-editor.org/rfc/rfc9535.html) except for
-the filter expression.
+```shell
+TASK="./taskw"
 
-Noted supported spec as follows:
+$TASK --list
+```
 
-- Identifiers: `$`.
-- Segments: Dot notation with recursive descent (search), bracket notation.
-- Selectors: wildcard, array slice, union, name, index.
+<table>
+  <thead>
+    <tr>
+      <th>Task</th>
+      <th>Description</th>
+      <th>Usage</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>env:build</code></td>
+      <td>
+        <p>Build the dev container image.</p>
+        <p>Image runs an ssh server one can connect to with vscode.</p>
+      </td>
+      <td><code>task env:build</code></td>
+    </tr>
+    <tr>
+      <td><code>env:info</code></td>
+      <td>Show current environment configuration.</td>
+      <td><code>task env:info</code></td>
+    </tr>
+    <tr>
+      <td><code>deps</code></td>
+      <td>Download and tidy dependencies.</td>
+      <td><code>task deps</code></td>
+    </tr>
+    <tr>
+      <td><code>test</code></td>
+      <td>Run tests.</td>
+      <td><code>task test</code></td>
+    </tr>
+    <tr>
+      <td><code>format</code></td>
+      <td>Format code.</td>
+      <td><code>task format</code></td>
+    </tr>
+    <tr>
+      <td><code>build</code></td>
+      <td>Compile into <code>dist</code> folder.</td>
+      <td><code>task build</code></td>
+    </tr>
+  </tbody>
+</table>
 
-Example JSONPaths:
+## Modules
 
-- `$..name..first`
-- `$.address[1:4:2]['country-of-orign']`
-- `$[*].countries[1,3,5]`
+### 1. Object
 
-## Additional modules
+The `object` module is the core of the library, allowing you to manipulate data structures.
 
-These modules support the core objective of the library.
+**Key Capabilities:**
 
-### Path
+- `Get`: Retrieve values.
+- `Set`: Update or insert values (auto-creates nested structures if schema is provided).
+- `Delete`: Remove values.
+- `ForEach`: Iterate over matches.
+- `AreEqual`: Deep comparison.
 
-[Module](src/path) for converting a [JSONPath](#jsonpath) string into a 2D array of detailed information about each path
-segment.
+**Example:**
 
-Such information is used when manipulating data using the core modules like get, set, and delete.
+```typescript
+import { JSObject } from 'js-json';
 
-### Schema
+const data = {
+    users: [
+        { name: 'Alice', id: 1 },
+        { name: 'Bob', id: 2 }
+    ]
+};
 
-[Module](src/schema) for defining and working with the schema of an object. This includes the data type as well as the
-tree structure of
-every simple primitive, linear collection element, or associative collection entry in an object.
+const obj = new JSObject();
+obj.Source = data;
 
-Useful for the following purposes:
+// Get
+const noOfResults = obj.Get('$.users[0].name');
+if (noOfResults > 0) {
+    console.log(obj.ValueFound); // Output: Alice
+}
 
-- Validating if an object adheres to a defined schema. Allows extension with custom validators.
-- Converting an object to a schema defined type. Allows extension with custom converters.
-- Deserializing data from json or yaml to a schema defined type. Allows extension with custom deserializers.
-- Recursively creating new nested objects with the [Set](src/object/set.ts) module. For example, a source empty nil
-  value of type any can end up being an array of user-defined classes if that is the schema definition.
-- Fetch the schema of data at a `JSONPath`.
+// Set
+obj.Set('$.users[1].active', true);
 
-## Supported data types
+// Delete
+obj.Delete('$.users[0]');
+```
 
-- Primitive types:
-    - `number`.
-    - `boolean`
-    - `string`
-- Collection types:
-    - Linear:
-        - `arrays`
-    - Associative:
-        - `objects`
-        - `classes`
-        - `maps`
+### 2. Schema
+
+The `schema` module allows you to define the expected structure of your data. This is useful for validation and conversion of dynamic data.
+
+**Example: Validation**
+
+```typescript
+import { DynamicSchemaNode, DataKind, Validation } from 'js-json';
+
+// Define a schema
+const userSchema = new DynamicSchemaNode({
+    Kind: DataKind.Object,
+    ChildNodes: {
+        Name: new DynamicSchemaNode({ Kind: DataKind.String }),
+        Age: new DynamicSchemaNode({ Kind: DataKind.Number })
+    }
+});
+
+const validator = new Validation();
+const data = { Name: 'Alice', Age: 30 };
+
+// Validate
+const ok = validator.ValidateData(data, userSchema);
+```
+
+**Example: Conversion**
+
+```typescript
+import { DynamicSchemaNode, DataKind, Conversion } from 'js-json';
+
+// Define schema (same as above)
+// ...
+
+const source = { Name: 'Alice', Age: '30' }; // Age is string in source
+
+const converter = new Conversion();
+// Converts and coerces types (string "30" -> number 30)
+const dest = converter.Convert(source, userSchema);
+```
+
+### 3. Path
+
+The `path` module handles parsing of JSONPath strings. It is primarily used internally by the `object` module but can be used directly to inspect paths.
+
+```typescript
+import { Parse } from 'js-json';
+
+const segments = Parse('$.store.book[*].author');
+```
+
+## Supported Data Types
+
+The library supports manipulation of:
+
+- **Primitives**: `string`, `number`, `boolean`, `bigint`, `symbol`.
+- **Collections**: `Map`, `Set`, `Array`, `Object` (classes).
+- **Any**: `any`.

@@ -1,476 +1,400 @@
-import type {JSONPath, RecursiveDescentSegment, RecursiveDescentSegments} from '@path'
-import {IsArray, IsMap, IsSet} from '@core'
+// @ts-expect-error 'JsonError' is declared but its value is never read.
+import { IsArray, IsMap, IsObject, IsSet, JsonError } from '@core';
+import type { JSONPath, RecursiveDescentSegment, RecursiveDescentSegments } from '@path';
 
 /**
- * Represents a JSONPath in its parsed and unparsed form.
+ * Represents a {@link JSONPath} both in its parsed and unparsed form.
  *
- * Ideally functions are expected to only work with a JSONPath with no recursive descent searches.
- * */
-export type SchemaPath = JSONPath | RecursiveDescentSegment | RecursiveDescentSegments
+ * Ideally functions are expected to only work with a {@link JSONPath} with no recursive descent searches.
+ */
+export type SchemaPath = JSONPath | RecursiveDescentSegment | RecursiveDescentSegments;
 
 /**
- * for defining custom conversion logic.
+ * For performing deserialization of data from various source formats to a destination that adheres to the {@link Schema}.
+ */
+export interface Deserializer {
+    /**
+     * Deserializes JSON string using {@link Schema}.
+     * @param data
+     * @param schema
+     * @throws {JsonError}
+     */
+    FromJSON(data: string, schema: Schema): any;
+
+    /**
+     * Deserializes YAML string using {@link Schema}.
+     * @param data
+     * @param schema
+     * @throws {JsonError}
+     */
+    FromYAML(data: string, schema: Schema): any;
+}
+
+export interface DefaultConverter {
+    /**
+     * Called when schema of type {@link Schema} is encountered in the recursive conversion process.
+     * @throws {JsonError}
+     */
+    RecursiveConvert(source: any, schema: Schema, pathSegments: RecursiveDescentSegment): any;
+
+    /**
+     * Entrypoint for conversion.
+     * @throws {JsonError}
+     */
+    Convert(source: any, schema: Schema): any;
+
+    /**
+     *
+     * @param source
+     * @param schema
+     * @throws {JsonError}
+     */
+    ConvertNode(source: any, schema: DynamicSchemaNode): any;
+}
+
+/**
+ * Converter for defining custom conversion logic.
  *
  * Meant to be implemented by custom data types that need to perform specific value-based conversion beyond defaults.
- * */
+ */
 export interface Converter {
     /**
-     * converts data based on schema.
+     * Convert converts data based on {@link Schema}.
      *
-     * @function
-     * @param source The data to be converted.
-     * @param schema The schema encountered to convert against.
-     * @param pathSegments Current Path segments where data was encountered. Useful if {@link SchemaError} is thrown.
-     * @returns deserialized data.
-     * @throws SchemaError with code {@link SchemaErrorCodes.DataConversionFailed} if conversion was not successful.
-     * */
-    Convert: (source: any, schema: Schema, pathSegments: RecursiveDescentSegment) => any;
+     * @param data The data to be converted.
+     * @param schema The schema encountered to {@link DefaultConverter.RecursiveConvert} against.
+     * @param pathSegments Current path segments where data was encountered.
+     * @returns converted data.
+     * @throws {JsonError}
+     */
+    Convert(data: any, schema: Schema, pathSegments: RecursiveDescentSegment): any;
 }
 
 /**
  * Map of custom converters with key representing unique `typeName`.
- *
- * Intended to be used for custom conversion logic of user-defined classes where `typeName` is obtained using `class.constructor.name`.
- * */
-export type Converters = Map<string, Converter>
+ */
+export type Converters = { [key: string]: Converter };
 
+export interface DefaultValidator {
+    /**
+     *
+     * @param data
+     * @param schema
+     * @throws {JsonError}
+     */
+    ValidateData(data: any, schema: Schema): boolean;
+
+    /**
+     *
+     * @param data
+     * @param schema
+     * @throws {JsonError}
+     */
+    ValidateNode(data: any, schema: DynamicSchemaNode): boolean;
+}
 /**
- * for defining custom data validation logic.
+ * For defining custom data validation logic.
  *
  * Meant to be implemented by custom data types that need to perform specific value-based validation that goes beyond the defaults.
- * */
+ */
 export interface Validator {
     /**
-     * validates data against a SchemaManip using custom rules.
-     *
-     * @function
-     * @param data The data to be converted.
+     * ValidateData validates data against a {@link Schema} using custom rules.
+     * @param data The data to be validated.
      * @param schema The schema encountered to be validated against with custom rules.
-     * @param pathSegments Current Path segments where data was encountered. Useful if {@link SchemaError} is thrown.
-     * @returns deserialized data.
-     * @throws SchemaError with code {@link SchemaErrorCodes.DataValidationAgainstSchemaFailed} if schema validation was not successful.
-     * */
-    ValidateData: (data: any, schema: Schema, pathSegments: RecursiveDescentSegment) => boolean;
+     * @param pathSegments Current Path segments where data was encountered.
+     * @throws {JsonError}
+     */
+    ValidateData(data: any, schema: Schema, pathSegments: RecursiveDescentSegment): boolean;
 }
 
 /**
  * Map of custom validators with key representing unique `typeName`.
- *
- * Intended to be used for custom validation logic of user-defined classes where `typeName` is obtained using `class.constructor.name`.
- * */
-export type Validators = Map<string, Validator>
+ */
+export type Validators = { [key: string]: Validator };
 
 /**
- * For performing deserialization of data from various source formats to a destination that adheres to the {@link Schema}.
- * */
-export interface Deserializer {
-    /**
-     * Deserializes JSON string into destination using {@link Schema}.
-     *
-     * @function
-     * @throws SchemaError
-     * */
-    FromJSON: (source: string, schema: Schema, reviver?: (this: any, key: string, value: any) => any) => any;
-
-    /**
-     * Deserializes YAML string into destination using {@link Schema}.
-     *
-     * @function
-     * @throws SchemaError
-     * */
-    FromYAML: (source: string, schema: Schema, options?: any) => any;
-}
-
-/**
- * Structure that represent a JSON-like schema.
- * */
+ * Represent a JSON-Like schema.
+ */
 export interface Schema {
-    /**
-     * placeholder implementor that returns `true` to indicate that they represent a JSON-Like schema.
-     * **/
-    IsSchema: () => boolean
-
-    /**
-     * Return string (like JSON) representation of schema.
-     * */
-    toJSON: () => {}
+    // Placeholder implementor that returns `true` to indicate that they represent a JSON-Like schema.
+    IsSchema(): boolean;
 }
-
-/**
- * Represents the set of {@link DynamicSchemaNodes} in {@link DynamicSchema.Nodes} that can be looped through for purposes such as {@link Validator validation} or {@link Converter conversion}.
- *
- * The key is unique ID which is appended to {@link DynamicSchema.ValidSchemaNodeKeys} when an action perform against a schema node is successful.
- * */
-export type DynamicSchemaNodes = Map<string, DynamicSchemaNode>
-
-export class DynamicSchema implements Schema {
-    /**
-     * The key for the default {@link DynamicSchemaNode} in {@link Nodes}.
-     * */
-    public DefaultSchemaNodeKey?: string
-
-    /**
-     * A map of {@link DynamicSchemaNode}, each representing a single valid schema.
-     * */
-    public Nodes?: DynamicSchemaNodes
-
-    /**
-     * A list of valid {@link DynamicSchemaNode} keys in {@link Nodes}. Usually populated through the schema validation process.
-     * */
-    public ValidSchemaNodeKeys?: string[]
-
-    private constructor(builder: DynamicSchemaBuilder) {
-        Object.assign(this, builder)
-    }
-
-    public IsSchema(): boolean {
-        return true
-    }
-
-    public toJSON() {
-        return {
-            DefaultSchemaNodeKey: this.DefaultSchemaNodeKey,
-            Nodes: this.Nodes
-                ? Object.fromEntries(this.Nodes.entries())
-                : undefined,
-            ValidSchemaNodeKeys: this.ValidSchemaNodeKeys
-        }
-    }
-
-    public static create(): DynamicSchemaBuilder {
-        return new DynamicSchemaBuilder()
-    }
-}
-
-export class DynamicSchemaBuilder {
-    public build() {
-        return new (DynamicSchema as any)(this) as DynamicSchema
-    }
-
-    public DefaultSchemaNodeKey?: string = DynamicSchemaDefaultNodeKey
-
-    public withDefaultSchemaNodeKey(value?: string) {
-        this.DefaultSchemaNodeKey = value
-        return this
-    }
-
-    public Nodes?: DynamicSchemaNodes
-
-    public withNodes(value?: DynamicSchemaNodes) {
-        this.Nodes = value
-        return this
-    }
-
-    public ValidSchemaNodeKeys?: string[]
-
-    public withValidSchemaNodeKeys(value?: string[]) {
-        this.ValidSchemaNodeKeys = value
-        return this
-    }
-}
-
-export const DynamicSchemaDefaultNodeKey = 'default'
 
 /**
  * Distinct categories of types of data.
- * */
-export const DataKinds = Object.freeze({
+ */
+export const DataKind = {
     String: 'String',
     Number: 'Number',
     Boolean: 'Boolean',
+    BigInt: 'BigInt',
+    Symbol: 'Symbol',
+    Function: 'Function',
     Array: 'Array',
     Map: 'Map',
     Set: 'Set',
     Object: 'Object',
     Any: 'Any'
-})
-export type DataKind = typeof DataKinds[keyof typeof DataKinds]
-
-export function DataKindFromTypeOf(v: any): DataKind {
-    switch (typeof v) {
-        case 'string':
-            return DataKinds.String
-        case 'number':
-            return DataKinds.Number
-        case 'boolean':
-            return DataKinds.Boolean
-        case 'object':
-            if (IsMap(v)) {
-                return DataKinds.Map
-            }
-            if (IsArray(v)) {
-                return DataKinds.Array
-            }
-            if (IsSet(v)) {
-                return DataKinds.Set
-            }
-            return DataKinds.Object
-        default:
-            return DataKinds.Any
-    }
+} as const;
+export type DataKind = (typeof DataKind)[keyof typeof DataKind];
+/**
+ * Determines the DataKind of a given value.
+ */
+export function GetDataKind(v: any): DataKind {
+    if (typeof v === 'string') return DataKind.String;
+    if (typeof v === 'number') return DataKind.Number;
+    if (typeof v === 'boolean') return DataKind.Boolean;
+    if (typeof v === 'bigint') return DataKind.BigInt;
+    if (typeof v === 'symbol') return DataKind.Symbol;
+    if (typeof v === 'function') return DataKind.Function;
+    if (IsArray(v)) return DataKind.Array;
+    if (IsMap(v)) return DataKind.Map;
+    if (IsSet(v)) return DataKind.Set;
+    if (IsObject(v)) return DataKind.Object;
+    return DataKind.Any;
 }
 
-/**
- * defines a single specific schema node within a {@link DynamicSchema}.
- *
- *  Useful when recursively setting data in a nested data structure during the creation of new nesting structure by discovering the exact type to use at each {@link CollectionMemberSegment} in a Path.
- * */
-export class DynamicSchemaNode implements Schema {
-    /**
-     * The type of data. typically obtained using `typeof`.
-     * */
-    public TypeOf?: string
+export type ChildNodes = { [key: string]: Schema };
 
+/**
+ * Defines a single specific schema node.
+ * It describes the type, kind, and structural constraints of a data node.
+ */
+export class DynamicSchemaNode implements Schema {
     /**
      * The underlying type of the data.
      * */
-    public Kind?: DataKind
-
+    private _Kind?: DataKind;
+    public get Kind(): DataKind | undefined {
+        return this._Kind;
+    }
+    public set Kind(value: DataKind | undefined) {
+        this._Kind = value;
+    }
     /**
-     * An instance of the default value to use.
+     * The type of data. typically obtained using `typeof`.
+     */
+    private _TypeOf?: string;
+    public get TypeOf(): string | undefined {
+        return this._TypeOf;
+    }
+    public set TypeOf(value: string | undefined) {
+        this._TypeOf = value;
+    }
+    /**
+     * Optional default value to use for new initializations.
      *
      * Important for new values (like maps or user-defined classes) created recursively at each path segment.
-     * */
-    public DefaultValue?: () => any
-
-    /**
-     * Indicates if {@link DefaultValue} has been set since it can be nil.
-     * */
-    public IsDefaultValueSet?: boolean
+     */
+    private _DefaultValue?: () => any;
+    public get DefaultValue(): (() => any) | undefined {
+        return this._DefaultValue;
+    }
+    public set DefaultValue(value: (() => any) | undefined) {
+        this._DefaultValue = value;
+    }
 
     /**
      * Specifies whether the current value can be empty.
      * */
-    public NullableOrUndefined?: boolean
-
+    private _Nullable: boolean = false;
+    public get Nullable(): boolean {
+        return this._Nullable;
+    }
+    public set Nullable(value: boolean) {
+        this._Nullable = value;
+    }
     /**
      * Specify a {@link Validator} for this specific node.
      * */
-    public Validator?: Validator
-
+    private _Validator?: Validator;
+    public get Validator(): Validator | undefined {
+        return this._Validator;
+    }
+    public set Validator(value: Validator | undefined) {
+        this._Validator = value;
+    }
+    /**
+     * Specify {@link Converter} for this specific node.
+     * */
+    private _Converter?: Converter;
+    public get Converter(): Converter | undefined {
+        return this._Converter;
+    }
+    public set Converter(value: Converter | undefined) {
+        this._Converter = value;
+    }
     /**
      * A recursive map defining the schema for the following:
      * * Specific key-value entries in an associative collection like map.
      *
      *      For each entry, it is important to specify the key type using {@link ChildNodesAssociativeCollectionEntriesKeySchema}.
+     *
      * * Specific elements at indexes in a linear collection like slice or array.
      * * All class top level members specifically those that are User defined.
      * */
-    public ChildNodes?: ChildNodes
-
+    private _ChildNodes?: ChildNodes;
+    public get ChildNodes(): ChildNodes | undefined {
+        return this._ChildNodes;
+    }
+    public set ChildNodes(value: ChildNodes | undefined) {
+        this._ChildNodes = value;
+    }
     /**
      * {@link Schema} for all keys of entries in an associative collection. Mandatory if Kind is {@link DataKind.Dictionary}.
      * */
-    public ChildNodesAssociativeCollectionEntriesKeySchema?: Schema
-
+    private _ChildNodesAssociativeCollectionEntriesKeySchema?: Schema;
+    public get ChildNodesAssociativeCollectionEntriesKeySchema(): Schema | undefined {
+        return this._ChildNodesAssociativeCollectionEntriesKeySchema;
+    }
+    public set ChildNodesAssociativeCollectionEntriesKeySchema(value: Schema | undefined) {
+        this._ChildNodesAssociativeCollectionEntriesKeySchema = value;
+    }
     /**
      * {@link Schema} for all values of entries in an associative collection. Mandatory if Kind is {@link DataKind.Dictionary}.
      * */
-    public ChildNodesAssociativeCollectionEntriesValueSchema?: Schema
-
+    private _ChildNodesAssociativeCollectionEntriesValueSchema?: Schema;
+    public get ChildNodesAssociativeCollectionEntriesValueSchema(): Schema | undefined {
+        return this._ChildNodesAssociativeCollectionEntriesValueSchema;
+    }
+    public set ChildNodesAssociativeCollectionEntriesValueSchema(value: Schema | undefined) {
+        this._ChildNodesAssociativeCollectionEntriesValueSchema = value;
+    }
     /**
      * {@link Schema} for all elements in an array. Mandatory if Kind is {@link DataKind.Array}.
      * */
-    public ChildNodesLinearCollectionElementsSchema?: Schema
-
+    private _ChildNodesLinearCollectionElementsSchema?: Schema;
+    public get ChildNodesLinearCollectionElementsSchema(): Schema | undefined {
+        return this._ChildNodesLinearCollectionElementsSchema;
+    }
+    public set ChildNodesLinearCollectionElementsSchema(value: Schema | undefined) {
+        this._ChildNodesLinearCollectionElementsSchema = value;
+    }
     /**
      * {@link Schema}  for node that is a specific entry in an associative collection.
      *
      * Ideally this means that the Kind in {@link ChildNodesAssociativeCollectionEntriesKeySchema} of the parent map is {@link DataKind.Any}.
      * */
-    public AssociativeCollectionEntryKeySchema?: Schema
-
+    private _AssociativeCollectionEntryKeySchema?: Schema;
+    public get AssociativeCollectionEntryKeySchema(): Schema | undefined {
+        return this._AssociativeCollectionEntryKeySchema;
+    }
+    public set AssociativeCollectionEntryKeySchema(value: Schema | undefined) {
+        this._AssociativeCollectionEntryKeySchema = value;
+    }
     /**
      * Ensure all {@linkcode ChildNodes} are present and validated.
      * */
-    public ChildNodesMustBeValid?: boolean
-
-    private constructor(builder: DynamicSchemaNodeBuilder) {
-        Object.assign(this, builder)
+    private _ChildNodesMustBeValid: boolean = false;
+    public get ChildNodesMustBeValid(): boolean {
+        return this._ChildNodesMustBeValid;
+    }
+    public set ChildNodesMustBeValid(value: boolean) {
+        this._ChildNodesMustBeValid = value;
     }
 
-    /**
-     * Specify {@link Converter} for this specific node.
-     * */
-    public Converter?: Converter
+    constructor(init?: Partial<DynamicSchemaNode>) {
+        if (init) {
+            Object.assign(this, init);
+        }
+    }
 
     public IsSchema(): boolean {
-        return true
+        return true;
     }
 
     public toJSON() {
         return {
-            Type: this.TypeOf,
             Kind: this.Kind,
+            TypeOf: this.TypeOf,
             DefaultValue: this.DefaultValue,
-            IsDefaultValueSet: this.IsDefaultValueSet,
-            Nullable: this.NullableOrUndefined,
-            ChildNodes: this.ChildNodes
-                ? Object.fromEntries(this.ChildNodes.entries())
-                : undefined,
+            Nullable: this.Nullable,
+            ChildNodes: this.ChildNodes,
+            ChildNodesAssociativeCollectionEntriesKeySchema: this.ChildNodesAssociativeCollectionEntriesKeySchema,
             ChildNodesAssociativeCollectionEntriesValueSchema: this.ChildNodesAssociativeCollectionEntriesValueSchema,
             ChildNodesLinearCollectionElementsSchema: this.ChildNodesLinearCollectionElementsSchema,
             AssociativeCollectionEntryKeySchema: this.AssociativeCollectionEntryKeySchema,
             ChildNodesMustBeValid: this.ChildNodesMustBeValid
+        };
+    }
+}
+
+/**
+ * DynamicSchema represents a collection of potential schemas.
+ * Often used for the root of a schema document or polymorphic types.
+ */
+export class DynamicSchema implements Schema {
+    /**
+     * The key for the default {@link DynamicSchemaNode} in {@link Nodes}.
+     * */
+    private _DefaultSchemaNodeKey: string = 'default';
+    public get DefaultSchemaNodeKey(): string {
+        return this._DefaultSchemaNodeKey;
+    }
+    public set DefaultSchemaNodeKey(value: string) {
+        this._DefaultSchemaNodeKey = value;
+    }
+    /**
+     * A map of {@link DynamicSchemaNode}, each representing a single valid schema.
+     * */
+    private _Nodes: { [key: string]: DynamicSchemaNode } = {};
+    public get Nodes(): { [key: string]: DynamicSchemaNode } {
+        return this._Nodes;
+    }
+    public set Nodes(value: { [key: string]: DynamicSchemaNode }) {
+        this._Nodes = value;
+    }
+    /**
+     * A list of valid {@link DynamicSchemaNode} keys in {@link Nodes}. Usually populated through the schema validation process.
+     * */
+    private _ValidSchemaNodeKeys: string[] = [];
+    public get ValidSchemaNodeKeys(): string[] {
+        return this._ValidSchemaNodeKeys;
+    }
+    public set ValidSchemaNodeKeys(value: string[]) {
+        this._ValidSchemaNodeKeys = value;
+    }
+
+    constructor(init?: Partial<DynamicSchema>) {
+        if (init) {
+            Object.assign(this, init);
         }
     }
 
-    public static create(): DynamicSchemaNodeBuilder {
-        return new DynamicSchemaNodeBuilder()
+    public IsSchema(): boolean {
+        return true;
+    }
+
+    public toJSON() {
+        return {
+            DefaultSchemaNodeKey: this.DefaultSchemaNodeKey,
+            Nodes: this.Nodes,
+            ValidSchemaNodeKeys: this.ValidSchemaNodeKeys
+        };
     }
 }
 
-export type ChildNodes = Map<string, Schema>
-
-export class DynamicSchemaNodeBuilder {
-    public build() {
-        return new (DynamicSchemaNode as any)(this) as DynamicSchemaNode
-    }
-
-    public TypeOf?: string
-
-    public withTypeOf(value?: string): DynamicSchemaNodeBuilder {
-        this.TypeOf = value
-        return this
-    }
-
-    public Kind?: DataKind
-
-    public withKind(value?: DataKind): DynamicSchemaNodeBuilder {
-        this.Kind = value
-        return this
-    }
-
-    public DefaultValue?: () => any
-
-    public withDefaultValue(value?: () => any): DynamicSchemaNodeBuilder {
-        this.DefaultValue = value
-        return this
-    }
-
-    public IsDefaultValueSet?: boolean
-
-    public withIsDefaultValueSet(value?: boolean): DynamicSchemaNodeBuilder {
-        this.IsDefaultValueSet = value
-        return this
-    }
-
-    public Nullable?: boolean
-
-    public withNullable(value?: boolean): DynamicSchemaNodeBuilder {
-        this.Nullable = value
-        return this
-    }
-
-    public Validator?: Validator
-
-    public withValidator(value?: Validator): DynamicSchemaNodeBuilder {
-        this.Validator = value
-        return this
-    }
-
-    public ChildNodes?: ChildNodes
-
-    public withChildNodes(value?: ChildNodes): DynamicSchemaNodeBuilder {
-        this.ChildNodes = value
-        return this
-    }
-
-    public ChildNodesAssociativeCollectionEntriesKeySchema?: Schema
-
-    public withChildNodesAssociativeCollectionEntriesKeySchema(value?: Schema): DynamicSchemaNodeBuilder {
-        this.ChildNodesAssociativeCollectionEntriesKeySchema = value
-        return this
-    }
-
-    public ChildNodesAssociativeCollectionEntriesValueSchema?: Schema
-
-    public withChildNodesAssociativeCollectionEntriesValueSchema(value?: Schema): DynamicSchemaNodeBuilder {
-        this.ChildNodesAssociativeCollectionEntriesValueSchema = value
-        return this
-    }
-
-    public ChildNodesLinearCollectionElementsSchema?: Schema
-
-    public withChildNodesLinearCollectionElementsSchema(value?: Schema): DynamicSchemaNodeBuilder {
-        this.ChildNodesLinearCollectionElementsSchema = value
-        return this
-    }
-
-    public AssociativeCollectionEntryKeySchema?: Schema
-
-    public withAssociativeCollectionEntryKeySchema(value?: Schema): DynamicSchemaNodeBuilder {
-        this.AssociativeCollectionEntryKeySchema = value
-        return this
-    }
-
-    public ChildNodesMustBeValid?: boolean
-
-    public withChildNodesMustBeValid(value?: boolean): DynamicSchemaNodeBuilder {
-        this.ChildNodesMustBeValid = value
-        return this
-    }
-
-    public Converter?: Converter
-
-    public withConverter(value?: Converter): DynamicSchemaNodeBuilder {
-        this.Converter = value
-        return this
-    }
-}
-
-export const SchemaErrorCodes = Object.freeze({
+export const SchemaErrorCodes = {
     /**
-     * general {@link Schema} error.
-     * */
+     * Default error.
+     */
     SchemaProcessorError: 'schema processing encountered an error',
-
     /**
-     * For when {@link SchemaAtPath.Get} fails.
-     * */
+     * Base error for {@link GetSchemaAtPath}.
+     */
     SchemaPathError: 'schema path error',
-
     /**
-     * for when {@link Validator} fails.
-     * */
+     * Base error for {@link Validator} or {@link DefaultValidator}.
+     */
     DataValidationAgainstSchemaFailed: 'data validation against schema failed',
-
     /**
-     * for when {@link Deserializer} fails.
-     * */
+     * Base error for {@link Deserializer}
+     */
     DataDeserializationFailed: 'data deserialization failed',
-
     /**
-     * for when {@link Converter} fails.
-     * */
+     * Base error for {@link Converter} or {@link DefaultConverter}
+     */
     DataConversionFailed: 'data conversion failed'
-})
-export type SchemaErrorCode = typeof SchemaErrorCodes[keyof typeof SchemaErrorCodes]
-
-/**
- * For when modules/classes that work with {@link Schema} need to return an error.
- * */
-export class SchemaError extends Error {
-    public readonly name: string = 'SchemaError'
-
-    public readonly errorCode?: SchemaErrorCode
-    public readonly functionName?: string
-    public readonly schema?: Schema
-    public readonly data: any
-    public readonly pathSegments?: RecursiveDescentSegment
-
-    constructor(errorCode?: SchemaErrorCode, functionName?: string, message?: string, schema?: Schema, data?: any, pathSegments?: RecursiveDescentSegment, options?: ErrorOptions) {
-        super(message, options)
-        this.errorCode = errorCode
-        this.functionName = functionName
-        this.schema = schema
-        this.data = data
-        this.pathSegments = pathSegments
-
-        // Set the prototype explicitly. This is crucial for maintaining the
-        // correct inheritance chain in older JavaScript environments,
-        // though modern Node.js and browsers handle this automatically.
-        // It's a good practice for reliability.
-        Object.setPrototypeOf(this, SchemaError.prototype)
-    }
-}
+} as const;
+export type SchemaErrorCode = (typeof SchemaErrorCodes)[keyof typeof SchemaErrorCodes];

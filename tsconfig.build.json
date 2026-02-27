@@ -1,17 +1,11 @@
 {
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    // You can override options here if needed, but often none are required.
-    "outDir": "dist"
-  },
-  "include": [
-    "src/**/*"
-    // Only include the source files for the build
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "test",
-    "src/**/__internal__/**/*" // internal code
-  ]
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "outDir": "dist",
+        "declaration": true,
+        "declarationMap": true
+    },
+    "include": ["src"],
+    "exclude": ["tests", "**/*.test.ts"]
 }

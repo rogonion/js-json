@@ -1,382 +1,436 @@
+import { IsMap, IsObject, IsSet, JsonError } from '@core';
+import { CollectionMemberSegment, type RecursiveDescentSegment } from '@path';
 import {
-    DataKinds,
+    DataKind,
+    type DefaultValidator,
     DynamicSchema,
     DynamicSchemaNode,
+    GetDataKind,
     type Schema,
-    SchemaError,
     SchemaErrorCodes,
-    type Validator,
     type Validators
-} from './core.ts'
-import {CollectionMemberSegment, JsonpathKeyRoot, type RecursiveDescentSegment} from '@path'
-import {
-    IsArray,
-    IsMap,
-    IsMapAndNotEmpty,
-    IsNullOrUndefined,
-    IsObjectLiteral,
-    IsObjectLiteralAndNotEmpty,
-    IsSet
-} from '@core'
+} from './core';
 
-/**
- * Module for validating data against {@link Schema}.
- *
- * @class
- * */
-export class Validation implements Validator {
-    private readonly validateOnFirstMatch: boolean
-
-    private _customValidators: Validators
-
-    constructor(validateOnFirstMatch: boolean = true, validators: Validators = new Map<string, Validator>()) {
-        this.validateOnFirstMatch = validateOnFirstMatch
-        this._customValidators = validators
+export class Validation implements DefaultValidator {
+    private _ValidateOnFirstMatch: boolean = true;
+    public set ValidateOnFirstMatch(value: boolean) {
+        this._ValidateOnFirstMatch = value;
     }
 
-    /**
-     * @function
-     * @throws SchemaError
-     * */
-    public ValidateData(data: any, schema: Schema, pathSegments: RecursiveDescentSegment = [CollectionMemberSegment.create().WithKey(JsonpathKeyRoot).WithIsKeyRoot(true).build()]): boolean {
-        const FunctionName = 'ValidateData'
+    private _CustomValidators: Validators = {};
+    public set CustomValidators(value: Validators) {
+        this._CustomValidators = value;
+    }
 
+    public ValidateData(data: any, schema: Schema): boolean {
+        return this.validateData(data, schema, [
+            Object.assign(new CollectionMemberSegment(), { Key: '$', IsKeyRoot: true })
+        ]);
+    }
+
+    public ValidateNode(data: any, schema: DynamicSchemaNode): boolean {
+        return this.validateDataWithDynamicSchemaNode(data, schema, []);
+    }
+
+    private validateData(data: any, schema: Schema, pathSegments: RecursiveDescentSegment): boolean {
         if (schema instanceof DynamicSchema) {
-            return this.validateDataWithDynamicSchema(data, schema, pathSegments)
+            return this.validateDataWithDynamicSchema(data, schema, pathSegments);
         } else if (schema instanceof DynamicSchemaNode) {
-            return this.validateDataWithDynamicSchemaNode(data, schema, pathSegments)
-        } else {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'unsupported schema type', schema, data, pathSegments)
+            return this.validateDataWithDynamicSchemaNode(data, schema, pathSegments);
         }
+        throw Object.assign(
+            new JsonError('unsupported schema type', undefined, SchemaErrorCodes.SchemaProcessorError),
+            {
+                Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+            }
+        );
     }
 
-    /**
-     * @function
-     * @throws SchemaError
-     * */
-    public validateDataWithDynamicSchema(data: any, schema: DynamicSchema, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'validateDataWithDynamicSchema'
-
-        if (!IsArray(schema.ValidSchemaNodeKeys)) {
-            schema.ValidSchemaNodeKeys = []
-        }
-
-        if (schema.DefaultSchemaNodeKey) {
-            if (schema.Nodes?.has(schema.DefaultSchemaNodeKey)) {
-                try {
-                    if (this.validateDataWithDynamicSchemaNode(data, schema.Nodes!.get(schema.DefaultSchemaNodeKey)!, pathSegments)) {
-                        schema.ValidSchemaNodeKeys!.push(schema.DefaultSchemaNodeKey)
-                        return true
-                    }
-                } catch (e) {
-                }
-            }
-        }
-
-        if (!IsMap(schema.Nodes)) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'no schema nodes found', schema, data, pathSegments)
-        }
-
-
-        let lastSchemaNodeError: SchemaError | undefined
-        for (const [schemaNodeKey, dynamicSchemaNode] of schema.Nodes!) {
-            if (schemaNodeKey === schema.DefaultSchemaNodeKey) {
-                continue
-            }
-
+    private validateDataWithDynamicSchema(
+        data: any,
+        schema: DynamicSchema,
+        pathSegments: RecursiveDescentSegment
+    ): boolean {
+        if (schema.DefaultSchemaNodeKey && schema.Nodes[schema.DefaultSchemaNodeKey]) {
             try {
-                const dataValidAgainstSchema = this.validateDataWithDynamicSchemaNode(data, dynamicSchemaNode, pathSegments)
-                if (dataValidAgainstSchema) {
-                    schema.ValidSchemaNodeKeys!.push(schemaNodeKey)
-                    if (this.validateOnFirstMatch) {
-                        return true
-                    }
+                if (
+                    this.validateDataWithDynamicSchemaNode(
+                        data,
+                        schema.Nodes[schema.DefaultSchemaNodeKey],
+                        pathSegments
+                    )
+                ) {
+                    schema.ValidSchemaNodeKeys.push(schema.DefaultSchemaNodeKey);
+                    return true;
                 }
             } catch (e) {
-                lastSchemaNodeError = e as SchemaError
+                // ignore
             }
         }
 
-        if (schema.ValidSchemaNodeKeys!.length === 0) {
-            if (lastSchemaNodeError) {
-                throw lastSchemaNodeError
-            }
-            return false
+        if (Object.keys(schema.Nodes).length === 0) {
+            throw Object.assign(
+                new JsonError('no schema nodes found', undefined, SchemaErrorCodes.DataValidationAgainstSchemaFailed),
+                {
+                    Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+                }
+            );
         }
 
-        return true
+        let lastError: Error | undefined;
+        for (const [key, node] of Object.entries(schema.Nodes)) {
+            if (key === schema.DefaultSchemaNodeKey) continue;
+
+            try {
+                if (this.validateDataWithDynamicSchemaNode(data, node, pathSegments)) {
+                    schema.ValidSchemaNodeKeys.push(key);
+                    if (this._ValidateOnFirstMatch) {
+                        return true;
+                    }
+                }
+            } catch (e: any) {
+                lastError = e;
+            }
+        }
+
+        if (schema.ValidSchemaNodeKeys.length === 0) {
+            throw (
+                lastError ||
+                Object.assign(
+                    new JsonError(
+                        'data not valid against any schema node',
+                        undefined,
+                        SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                    ),
+                    {
+                        Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+                    }
+                )
+            );
+        }
+        return true;
     }
 
-    /**
-     * @function
-     * @throws SchemaError
-     * */
-    private validateDataWithDynamicSchemaNode(data: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'validateDataWithDynamicSchemaNode'
-
-        if (IsNullOrUndefined(data)) {
-            if (!schema.NullableOrUndefined) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'data cannot be null or undefined', schema, data, pathSegments)
+    private validateDataWithDynamicSchemaNode(
+        data: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): boolean {
+        if (data === null || data === undefined) {
+            if (!schema.Nullable) {
+                throw Object.assign(
+                    new JsonError('data cannot be nil', undefined, SchemaErrorCodes.DataValidationAgainstSchemaFailed),
+                    {
+                        Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+                    }
+                );
             }
-            return true
+            return true;
         }
 
-        if (schema.Kind === DataKinds.Any) {
-            return true
+        if (schema.Kind === DataKind.Any) {
+            return true;
         }
 
-        if (typeof data !== schema.TypeOf) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'typeof data not valid', schema, data, pathSegments)
+        const dataKind = GetDataKind(data);
+        if (schema.Kind && schema.Kind !== dataKind) {
+            throw Object.assign(
+                new JsonError(
+                    `data.Kind (${dataKind}) is not valid (expected ${schema.Kind})`,
+                    undefined,
+                    SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                ),
+                {
+                    Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+                }
+            );
         }
 
         if (schema.Validator) {
-            return schema.Validator.ValidateData(data, schema, pathSegments)
+            return schema.Validator.ValidateData(data, schema, pathSegments);
         }
 
-        if (!IsNullOrUndefined(data)) {
-            const typeName = data.constructor.name
-            if (this._customValidators.has(typeName)) {
-                return this._customValidators.get(typeName)!.ValidateData(data, schema, pathSegments)
-            }
+        if (data.constructor && this._CustomValidators[data.constructor.name]) {
+            return this._CustomValidators[data.constructor.name].ValidateData(data, schema, pathSegments);
         }
 
-        switch (typeof data) {
-            case 'object':
-                switch (schema.Kind) {
-                    case DataKinds.Array:
-                        return this.validateDataWithDynamicSchemaNodeArray(data, schema, pathSegments)
-                    case DataKinds.Map:
-                        return this.validateDataWithDynamicSchemaNodeMap(data, schema, pathSegments)
-                    case DataKinds.Set:
-                        return this.validateDataWithDynamicSchemaNodeSet(data, schema, pathSegments)
-                    default:
-                        return this.validateDataWithDynamicSchemaNodeObject(data, schema, pathSegments)
-                }
+        switch (dataKind) {
+            case DataKind.Array:
+                return this.validateDataWithDynamicSchemaNodeArray(data, schema, pathSegments);
+            case DataKind.Set:
+                return this.validateDataWithDynamicSchemaNodeSet(data, schema, pathSegments);
+            case DataKind.Map:
+                return this.validateDataWithDynamicSchemaNodeMap(data, schema, pathSegments);
+            case DataKind.Object:
+                return this.validateDataWithDynamicSchemaNodePOJO(data, schema, pathSegments);
             default:
-                return true
+                return true;
         }
     }
 
-    private validateDataWithDynamicSchemaNodeMap(data: Map<any, any>, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'validateDataWithDynamicSchemaNodeMap'
-        if (IsNullOrUndefined(data)) {
-            if (!schema.NullableOrUndefined) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'data cannot be null or undefined', schema, data, pathSegments)
+    // array/slice
+    private validateDataWithDynamicSchemaNodeArray(
+        data: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): boolean {
+        const iterator = IsSet(data) ? (data as Set<any>).values() : data;
+
+        if (schema.ChildNodesLinearCollectionElementsSchema) {
+            let i = 0;
+            for (const item of iterator) {
+                const currentPathSegments = [
+                    ...pathSegments,
+                    Object.assign(new CollectionMemberSegment(), { Index: i, IsIndex: true })
+                ];
+
+                let currentSchema = schema.ChildNodesLinearCollectionElementsSchema;
+                if (schema.ChildNodes && schema.ChildNodes[String(i)]) {
+                    currentSchema = schema.ChildNodes[String(i)];
+                }
+
+                this.validateData(item, currentSchema, currentPathSegments);
+                i++;
             }
-            return true
+            return true;
         }
 
-        if (!IsMap(data)) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `data is not a ${DataKinds.Map}`, schema, data, pathSegments)
+        throw Object.assign(
+            new JsonError(
+                'schema to validate element(s) in data (slice/array) not found',
+                undefined,
+                SchemaErrorCodes.DataValidationAgainstSchemaFailed
+            ),
+            {
+                Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+            }
+        );
+    }
+
+    private validateDataWithDynamicSchemaNodeSet(
+        data: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): boolean {
+        const iterator = (data as Set<any>).values();
+
+        if (schema.ChildNodesLinearCollectionElementsSchema) {
+            let i = 0;
+            for (const item of iterator) {
+                const currentPathSegments = [
+                    ...pathSegments,
+                    Object.assign(new CollectionMemberSegment(), { Index: i, IsIndex: true })
+                ];
+
+                let currentSchema = schema.ChildNodesLinearCollectionElementsSchema;
+                if (schema.ChildNodes && schema.ChildNodes[String(i)]) {
+                    currentSchema = schema.ChildNodes[String(i)];
+                }
+
+                this.validateData(item, currentSchema, currentPathSegments);
+                i++;
+            }
+            return true;
         }
 
-        if (IsMapAndNotEmpty(schema.ChildNodes) || (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema))) {
-            let childSchemaNodesValidated: string[] = []
+        throw Object.assign(
+            new JsonError(
+                'schema to validate element(s) in data (set) not found',
+                undefined,
+                SchemaErrorCodes.DataValidationAgainstSchemaFailed
+            ),
+            {
+                Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+            }
+        );
+    }
 
-            for (const [key, childObjectValue] of data) {
-                let currentPathSegments = [...pathSegments, {Key: key, IsKey: true}]
+    private validateDataWithDynamicSchemaNodeMap(
+        data: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): boolean {
+        let entries: [any, any][] = [];
+        if (IsMap(data)) {
+            entries = Array.from((data as Map<any, any>).entries());
+        } else if (IsObject(data)) {
+            entries = Object.entries(data);
+        }
 
-                if (schema.ChildNodes?.has(key)) {
-                    let childSchema = schema.ChildNodes!.get(key)!
+        const hasGeneralSchema =
+            schema.ChildNodesAssociativeCollectionEntriesKeySchema &&
+            schema.ChildNodesAssociativeCollectionEntriesValueSchema;
+        const hasSpecificSchema = schema.ChildNodes && Object.keys(schema.ChildNodes).length > 0;
+
+        if (hasGeneralSchema || hasSpecificSchema) {
+            const childSchemaNodesValidated: string[] = [];
+
+            for (const [key, value] of entries) {
+                const keyStr = String(key);
+                const currentPathSegments = [
+                    ...pathSegments,
+                    Object.assign(new CollectionMemberSegment(), { Key: keyStr, IsKey: true })
+                ];
+
+                if (schema.ChildNodes && schema.ChildNodes[keyStr]) {
+                    const childSchema = schema.ChildNodes[keyStr];
 
                     if (childSchema instanceof DynamicSchema) {
-                        if (!IsArray(childSchema.ValidSchemaNodeKeys)) {
-                            childSchema.ValidSchemaNodeKeys = []
-                        }
-                        if (IsMapAndNotEmpty(childSchema.Nodes)) {
-                            for (const [childNodeKey, childNode] of childSchema.Nodes!) {
-                                if (!childNode.AssociativeCollectionEntryKeySchema) {
-                                    throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Schema for all ${DataKinds.Map} keys for key ${key}`, schema, data, pathSegments)
+                        let matched = false;
+                        let lastErr;
+                        for (const [nodeKey, node] of Object.entries(childSchema.Nodes)) {
+                            let keySchema = node.AssociativeCollectionEntryKeySchema;
+                            if (!keySchema) keySchema = schema.ChildNodesAssociativeCollectionEntriesKeySchema;
+
+                            let keyValid = false;
+                            try {
+                                if (keySchema) this.validateData(key, keySchema, currentPathSegments);
+                                keyValid = true;
+                            } catch {}
+
+                            if (keyValid) {
+                                try {
+                                    this.validateData(value, node, currentPathSegments);
+                                    childSchema.ValidSchemaNodeKeys.push(nodeKey);
+                                    matched = true;
+                                    break;
+                                } catch (e) {
+                                    lastErr = e;
                                 }
-                                if (this.ValidateData(key, childNode.AssociativeCollectionEntryKeySchema, currentPathSegments)) {
-                                    if (this.ValidateData(childObjectValue, childNode, currentPathSegments)) {
-                                        childSchema.ValidSchemaNodeKeys!.push(childNodeKey)
+                            }
+                        }
+                        if (!matched) {
+                            throw (
+                                lastErr ||
+                                Object.assign(
+                                    new JsonError(
+                                        'map entry not valid against any DynamicSchema nodes',
+                                        undefined,
+                                        SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                                    ),
+                                    {
+                                        Data: { Schema: childSchema, Data: value, PathSegments: currentPathSegments }
                                     }
-                                }
-                            }
-                            if (childSchema.ValidSchemaNodeKeys!.length === 0) {
-                                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `${DataKinds.Map} entry with key ${key} not valid against any DynamicSchema nodes`, schema, data, pathSegments)
-                            }
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `No DynamicSchema found for ${DataKinds.Map} key ${key}`, schema, data, pathSegments)
+                                )
+                            );
                         }
                     } else if (childSchema instanceof DynamicSchemaNode) {
-                        if (!childSchema.AssociativeCollectionEntryKeySchema) {
-                            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Schema for all ${DataKinds.Map} keys for key ${key}`, schema, data, pathSegments)
-                        }
+                        let keySchema = childSchema.AssociativeCollectionEntryKeySchema;
+                        if (!keySchema) keySchema = schema.ChildNodesAssociativeCollectionEntriesKeySchema;
 
-                        if (this.ValidateData(key, childSchema.AssociativeCollectionEntryKeySchema, currentPathSegments)) {
-                            if (!this.ValidateData(childObjectValue, childSchema, currentPathSegments)) {
-                                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Value for ${DataKinds.Map} key ${key} not valid against schema`, schema, data, pathSegments)
-                            }
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Key for ${DataKinds.Map} key ${key} not valid against schema`, schema, data, pathSegments)
+                        if (keySchema) {
+                            this.validateData(key, keySchema, currentPathSegments);
                         }
-                    } else {
-                        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Unsupported schema type for ${DataKinds.Map} key ${key}`, schema, data, pathSegments)
+                        this.validateData(value, childSchema, currentPathSegments);
                     }
 
-                    childSchemaNodesValidated.push(key)
-                    continue
+                    childSchemaNodesValidated.push(keyStr);
+                    continue;
                 }
 
-                if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                    if (this.ValidateData(key, schema.ChildNodesAssociativeCollectionEntriesKeySchema!, currentPathSegments)) {
-                        if (this.ValidateData(childObjectValue, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)) {
-                            continue
-                        }
-                        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Value for ${DataKinds.Map} key ${key} not valid against schema`, schema, data, pathSegments)
+                if (hasGeneralSchema) {
+                    this.validateData(
+                        key,
+                        schema.ChildNodesAssociativeCollectionEntriesKeySchema!,
+                        currentPathSegments
+                    );
+                    this.validateData(
+                        value,
+                        schema.ChildNodesAssociativeCollectionEntriesValueSchema!,
+                        currentPathSegments
+                    );
+                    continue;
+                }
+
+                throw Object.assign(
+                    new JsonError(
+                        `Schema for map key ${keyStr} not found`,
+                        undefined,
+                        SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                    ),
+                    {
+                        Data: { Schema: schema, Data: data, PathSegments: currentPathSegments }
                     }
-                    throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Key for ${DataKinds.Map} key ${key} not valid against schema`, schema, data, pathSegments)
+                );
+            }
+
+            if (schema.ChildNodesMustBeValid && schema.ChildNodes) {
+                if (childSchemaNodesValidated.length !== Object.keys(schema.ChildNodes).length) {
+                    throw Object.assign(
+                        new JsonError(
+                            'not all child nodes are present and validated against',
+                            undefined,
+                            SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                        ),
+                        {
+                            Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+                        }
+                    );
                 }
-
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `no schema to validate entries in data (${DataKinds.Map}) found`, schema, data, pathSegments)
             }
 
-            if (schema.ChildNodes && childSchemaNodesValidated.length !== schema.ChildNodes.size && schema.ChildNodesMustBeValid) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'not all child nodes are present and validated against', schema, data, pathSegments)
-            }
-
-            return true
+            return true;
         }
 
-        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `no schema to validate entries in data (${DataKinds.Map}) found`, schema, data, pathSegments)
+        throw Object.assign(
+            new JsonError(
+                'no schema to validate entries in data (map) found',
+                undefined,
+                SchemaErrorCodes.DataValidationAgainstSchemaFailed
+            ),
+            {
+                Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+            }
+        );
     }
 
-    private validateDataWithDynamicSchemaNodeObject(data: any, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'validateDataWithDynamicSchemaNodeObject'
+    // struct
+    private validateDataWithDynamicSchemaNodePOJO(
+        data: any,
+        schema: DynamicSchemaNode,
+        pathSegments: RecursiveDescentSegment
+    ): boolean {
+        if (!schema.ChildNodes || Object.keys(schema.ChildNodes).length === 0) {
+            throw Object.assign(
+                new JsonError(
+                    'no schema for properties in data struct found',
+                    undefined,
+                    SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                ),
+                {
+                    Data: { Schema: schema, Data: data, PathSegments: pathSegments }
+                }
+            );
+        }
 
-        if (IsNullOrUndefined(data)) {
-            if (!schema.NullableOrUndefined) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'data cannot be null or undefined', schema, data, pathSegments)
+        const childSchemaNodesValidated: string[] = [];
+
+        for (const key of Object.keys(data)) {
+            if (schema.ChildNodes[key]) {
+                childSchemaNodesValidated.push(key);
+                const currentPathSegments = [
+                    ...pathSegments,
+                    Object.assign(new CollectionMemberSegment(), { Key: key, IsKey: true })
+                ];
+                this.validateData(data[key], schema.ChildNodes[key], currentPathSegments);
             }
-            return true
         }
 
-        if (!IsObjectLiteral(data)) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `data is not an ${DataKinds.Object}`, schema, data, pathSegments)
-        }
-
-        if (IsMapAndNotEmpty(schema.ChildNodes) || (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema))) {
-            let childSchemaNodesValidated: string[] = []
-
-            for (const [key, childObjectValue] of Object.entries(data)) {
-                let currentPathSegments = [...pathSegments, {Key: key, IsKey: true}]
-
-                if (schema.ChildNodes?.has(key)) {
-                    let childSchema = schema.ChildNodes!.get(key)!
-
-                    if (childSchema instanceof DynamicSchema) {
-                        childSchema.ValidSchemaNodeKeys = []
-                        if (IsMapAndNotEmpty(childSchema.Nodes)) {
-                            for (const [childNodeKey, childNode] of childSchema.Nodes!) {
-                                if (this.ValidateData(childObjectValue, childNode, currentPathSegments)) {
-                                    childSchema.ValidSchemaNodeKeys.push(childNodeKey)
-                                }
-                            }
-                            if (childSchema.ValidSchemaNodeKeys.length === 0) {
-                                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `${DataKinds.Object} entry with key ${key} not valid against any DynamicSchema nodes`, schema, data, pathSegments)
-                            }
-                        } else {
-                            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `No DynamicSchema found for ${DataKinds.Object} key ${key}`, schema, data, pathSegments)
-                        }
-                    } else if (childSchema instanceof DynamicSchemaNode) {
-                        if (!this.ValidateData(childObjectValue, childSchema, currentPathSegments)) {
-                            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Value for ${DataKinds.Object} key ${key} not valid against schema`, schema, data, pathSegments)
-                        }
-                    } else {
-                        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Unsupported schema type for ${DataKinds.Object} key ${key}`, schema, data, pathSegments)
+        if (schema.ChildNodesMustBeValid) {
+            if (childSchemaNodesValidated.length !== Object.keys(schema.ChildNodes).length) {
+                throw Object.assign(
+                    new JsonError(
+                        'not all child nodes are present and validated against',
+                        undefined,
+                        SchemaErrorCodes.DataValidationAgainstSchemaFailed
+                    ),
+                    {
+                        Data: { Schema: schema, Data: data, PathSegments: pathSegments }
                     }
-
-                    childSchemaNodesValidated.push(key)
-                    continue
-                }
-
-                if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesKeySchema) && IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-                    if (this.ValidateData(key, schema.ChildNodesAssociativeCollectionEntriesKeySchema!, currentPathSegments)) {
-                        if (this.ValidateData(childObjectValue, schema.ChildNodesAssociativeCollectionEntriesValueSchema!, currentPathSegments)) {
-                            continue
-                        }
-                        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Value for ${DataKinds.Object} key ${key} not valid against schema`, schema, data, pathSegments)
-                    }
-                    throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `Key for ${DataKinds.Object} key ${key} not valid against schema`, schema, data, pathSegments)
-                }
-
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `no schema to validate entries in data (${DataKinds.Object}) found`, schema, data, pathSegments)
+                );
             }
-
-            if (schema.ChildNodes && childSchemaNodesValidated.length !== schema.ChildNodes.size && schema.ChildNodesMustBeValid) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'not all child nodes are present and validated against', schema, data, pathSegments)
-            }
-
-            return true
         }
 
-        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `no schema to validate entries in data (${DataKinds.Object}) found`, schema, data, pathSegments)
-    }
-
-    private validateDataWithDynamicSchemaNodeSet(data: Set<any>, schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'validateDataWithDynamicSchemaNodeSet'
-
-        if (IsNullOrUndefined(data)) {
-            if (!schema.NullableOrUndefined) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'data cannot be null or undefined', schema, data, pathSegments)
-            }
-            return true
-        }
-
-        if (!IsSet(data)) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `data is not a ${DataKinds.Set}`, schema, data, pathSegments)
-        }
-
-        if (IsObjectLiteralAndNotEmpty(schema.ChildNodesAssociativeCollectionEntriesValueSchema)) {
-            let childSchema = schema.ChildNodesAssociativeCollectionEntriesValueSchema!
-
-            let i = 0
-            for (const entry of data) {
-                let currentPathSegments = [...pathSegments, {Index: i, IsIndex: true}]
-
-                if (!this.ValidateData(entry, childSchema!, currentPathSegments)) {
-                    return false
-                }
-
-                i++
-            }
-
-            return true
-        }
-
-        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `schema to validate entries in data (${DataKinds.Set}) not found`, schema, data, pathSegments)
-    }
-
-    private validateDataWithDynamicSchemaNodeArray(data: any[], schema: DynamicSchemaNode, pathSegments: RecursiveDescentSegment): boolean {
-        const FunctionName = 'validateDataWithDynamicSchemaNodeArray'
-
-        if (IsNullOrUndefined(data)) {
-            if (!schema.NullableOrUndefined) {
-                throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, 'data cannot be null or undefined', schema, data, pathSegments)
-            }
-            return true
-        }
-
-        if (!IsArray(data)) {
-            throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `data is not an ${DataKinds.Array}`, schema, data, pathSegments)
-        }
-
-        if (IsObjectLiteralAndNotEmpty(schema.ChildNodesLinearCollectionElementsSchema)) {
-            const childSchema = schema.ChildNodesLinearCollectionElementsSchema!
-
-            for (let i = 0; i < data.length; i++) {
-                let currentPathSegments = [...pathSegments, {Index: i, IsIndex: true}]
-
-                if (!this.ValidateData(data[i], childSchema, currentPathSegments)) {
-                    return false
-                }
-            }
-
-            return true
-        }
-
-        throw new SchemaError(SchemaErrorCodes.DataValidationAgainstSchemaFailed, FunctionName, `schema to validate element(s) in data (${DataKinds.Array}) not found`, schema, data, pathSegments)
+        return true;
     }
 }

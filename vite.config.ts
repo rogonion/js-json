@@ -1,6 +1,6 @@
-import {defineConfig} from 'vite'
-import tsconfigPaths from 'vite-tsconfig-paths'
-import dtsPlugin from 'vite-plugin-dts'
+import { defineConfig } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
+import dtsPlugin from 'vite-plugin-dts';
 
 export default defineConfig({
     plugins: [
@@ -17,4 +17,4 @@ export default defineConfig({
             fileName: (format) => `index.${format}.js`
         }
     }
-})
+});

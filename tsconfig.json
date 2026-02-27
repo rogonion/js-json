@@ -1,53 +1,27 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "module": "ESNext",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
-    "skipLibCheck": true,
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "declaration": true,
-    "outDir": "dist",
-    "baseUrl": ".",
-    "paths": {
-      "@internal": [
-        "./src/__internal__"
-      ],
-      "@core": [
-        "./src/core"
-      ],
-      "@object": [
-        "./src/object"
-      ],
-      "@path": [
-        "./src/path"
-      ],
-      "@schema": [
-        "./src/schema"
-      ],
-      "@schemapath": [
-        "./src/schemapath"
-      ]
-    }
-  },
-  "include": [
-    "src",
-    "tests"
-  ]
+    "compilerOptions": {
+        "target": "ESNext",
+        "useDefineForClassFields": true,
+        "module": "ESNext",
+        "lib": ["ESNext", "DOM"],
+        "moduleResolution": "Bundler",
+        "strict": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "esModuleInterop": true,
+        "noEmit": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitReturns": true,
+        "skipLibCheck": true,
+        "verbatimModuleSyntax": true,
+        "paths": {
+            "@internal": ["./src/__internal__"],
+            "@core": ["./src/core"],
+            "@path": ["./src/path"],
+            "@schema": ["./src/schema"],
+            "@object": ["./src/object"]
+        }
+    },
+    "include": ["src", "tests"]
 }

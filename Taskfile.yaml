@@ -1,0 +1,91 @@
+version: '3'
+
+dotenv: ['.env', '{{.HOME}}/.env']
+
+vars:
+    _CONTAINER_ENGINE:
+        sh: command -v podman >/dev/null && echo podman || echo docker
+    CONTAINER_ENGINE: '{{.CONTAINER_ENGINE | default ._CONTAINER_ENGINE}}'
+
+    IMAGE_NAME: '{{.IMAGE_NAME | default "go-metadatamodel-dev"}}'
+    IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+
+    _VSCODE_COMMIT_ID:
+        sh: ls -t ~/.vscode-server/bin/ 2>/dev/null | head -n 1
+    VSCODE_COMMIT_ID: '{{.VSCODE_COMMIT_ID | default ._VSCODE_COMMIT_ID}}'
+
+    TARGET: '{{.TARGET | default "./..."}}'
+
+    SUDO_CMD: '{{if eq .USE_SUDO "true"}}sudo {{else}}{{end}}'
+
+tasks:
+    env:info:
+        desc: 'Show current environment configuration.'
+        cmds:
+            - >
+                echo "Engine: {{.CONTAINER_ENGINE}}"
+            - >
+                echo "Image: {{.IMAGE_NAME}}:{{.IMAGE_TAG}}"
+            - >
+                echo "Vscode Commit ID: {{.VSCODE_COMMIT_ID}}"
+    env:build:
+        desc: 'Build the dev container image. Pre-installs vscode-server.'
+        cmds:
+            - chmod +x .devcontainer/install_vscode.sh
+            - |
+                {{.SUDO_CMD}}{{.CONTAINER_ENGINE}} build \
+                  -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} \
+                  -f .devcontainer/Containerfile \
+                  --build-arg COMMIT_ID={{.VSCODE_COMMIT_ID}} \
+                  .devcontainer
+
+    deps:
+        desc: 'Download dependencies.'
+        cmds:
+            - echo "📦 Downloading dependencies..."
+            - npm install
+
+    test:
+        desc: |
+            Run tests.
+
+            Example:
+            - `./taskw test` - Run all tests.
+            - `./taskw test -- -- schema` - Run tests in the schema folder of tests.
+            - `./taskw test -- -- -t "JSObject" - Run tests with the `JSObject` pattern (most if not all the tests in the object folder of tests).
+        cmds:
+            - echo "🧪 Testing ..."
+            - npm run test {{.CLI_ARGS}}
+
+    test:watch:
+        desc: |
+            Run tests in watch mode.
+
+            Example:
+            - `./taskw test:watch` - Run all tests.
+            - `./taskw test:watch -- -- schema` - Run tests in the schema folder of tests.
+            - `./taskw test:watch -- -- -t "JSObject" - Run tests with the `JSObject` pattern (most if not all the tests in the object folder of tests).
+        cmds:
+            - echo "🧪 Testing ..."
+            - npm run test:watch {{.CLI_ARGS}}
+
+    build:
+        desc: |
+            Build library.
+        cmds:
+            - echo "🏗️ Building ..."
+            - npm run build
+
+    publish:
+        desc: |
+            Publish package on npm
+        cmds:
+            - echo "📦 Publishing ..."
+            - npm run publish
+
+    format:
+        desc: |
+            Format code using prettier.
+        cmds:
+            - echo "🧹 Formatting ..."
+            - npm run format

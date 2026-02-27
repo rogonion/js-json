@@ -1,649 +1,825 @@
-import {Obj, ObjectError, ObjectErrorCodes} from './core.ts'
-import {
-    CollectionMemberSegment,
-    CollectionMemberSegmentToString,
-    type JSONPath,
-    JsonpathKeyRoot,
-    Parse,
-    type RecursiveDescentSegment
-} from '@path'
-import {PathSegmentsIndexes, PathSegmentsIndexesBuilder} from '@internal'
-import {Conversion, type Converter, type DataKind, DataKinds} from '@schema'
-import {
-    IsArray,
-    IsArrayAndNotEmpty,
-    IsMap,
-    IsNullOrUndefined,
-    IsObjectLiteral,
-    IsObjectLiteralAndNotEmpty,
-    IsSet
-} from '@core'
+import { Parse, CollectionMemberSegment, type JSONPath, type RecursiveDescentSegment } from '@path';
+import type { JSObject } from './object';
+import { PathSegmentsIndexes } from '@internal';
+import { DataKind } from '@schema';
+import { IsArray, IsDefined, IsMap, IsNumber, IsObject, IsSet, IsString, JsonError } from '@core';
+import { JSObjectErrorCodes } from './core';
 
-export interface GetObjectResult {
-    Result: any
-    Ok: boolean
-}
+/**
+ * Retrieves value(s) in {@link JSObject.Source} at {@link JSONPath}.
+ *
+ * For {@link JSONPath} patterns like recursive descent pattern (`$..One`), wildcard (`$.One[*]`), or union selector (`$.['One','Two','Three']`) expect an array of values found.
+ *
+ */
+export class JSObjectGet {
+    private _object: JSObject;
 
-export class GetValue extends Obj {
-    constructor(defaultConverter: Converter = new Conversion()) {
-        super(defaultConverter)
+    constructor(object: JSObject) {
+        this._object = object;
     }
 
-    public Get(root: any, jsonPath: JSONPath): GetObjectResult {
-        if (jsonPath === JsonpathKeyRoot) {
-            return {
-                Result: root,
-                Ok: true
-            }
+    public Get(jsonPath: JSONPath): number {
+        if (jsonPath === '$' || jsonPath === '') {
+            this._object.ValueFound = this._object.Source;
+            this._object.NoOfResults = 1;
+            return 1;
         }
 
-        const FunctionName = 'Get'
+        this._object.RecursiveDescentSegments = Parse(jsonPath);
+        this._object.NoOfResults = 0;
+        this._object.LastError = undefined;
 
-        this._recursiveDescentSegments = Parse(jsonPath)
+        const currentPathSegmentIndexes = new PathSegmentsIndexes();
+        currentPathSegmentIndexes.CurrentRecursive = 0;
+        currentPathSegmentIndexes.LastRecursive = this._object.RecursiveDescentSegments.length - 1;
 
-        let currentPathSegmentIndexesBuilder: PathSegmentsIndexesBuilder = PathSegmentsIndexes.create()
-        currentPathSegmentIndexesBuilder.WithLastRecursive(this._recursiveDescentSegments.length - 1)
-
-        if (currentPathSegmentIndexesBuilder.CurrentRecursive > currentPathSegmentIndexesBuilder.LastRecursive || currentPathSegmentIndexesBuilder.CurrentCollection > currentPathSegmentIndexesBuilder.LastCollection) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'currentPathSegmentIndexes empty', undefined, root)
+        if (currentPathSegmentIndexes.CurrentRecursive > currentPathSegmentIndexes.LastRecursive) {
+            this._object.LastError = Object.assign(
+                new JsonError('currentPathSegmentIndexes empty', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { Source: this._object.Source }
+                }
+            );
+            return 0;
         }
 
-        currentPathSegmentIndexesBuilder.CurrentCollection = 0
-        currentPathSegmentIndexesBuilder.WithLastCollection(this._recursiveDescentSegments[0].length - 1)
-        if (currentPathSegmentIndexesBuilder.CurrentCollection > currentPathSegmentIndexesBuilder.LastCollection) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'recursiveDescentSegments empty', undefined, root)
+        currentPathSegmentIndexes.CurrentCollection = 0;
+        currentPathSegmentIndexes.LastCollection = (this._object.RecursiveDescentSegments[0] || []).length - 1;
+
+        if (currentPathSegmentIndexes.CurrentCollection > currentPathSegmentIndexes.LastCollection) {
+            this._object.LastError = Object.assign(
+                new JsonError('currentPathSegmentIndexes empty', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { Source: this._object.Source }
+                }
+            );
+            return 0;
         }
 
-        if (currentPathSegmentIndexesBuilder.CurrentRecursive == currentPathSegmentIndexesBuilder.LastRecursive) {
-            return this.recursiveGet(root, currentPathSegmentIndexesBuilder.build(), [])
+        let result: any;
+        if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
+            result = this.recursiveGet(this._object.Source, currentPathSegmentIndexes, []);
+        } else {
+            result = this.recursiveDescentGet(this._object.Source, currentPathSegmentIndexes, []);
         }
 
-        return this.recursiveDescentGet(root, currentPathSegmentIndexesBuilder.build(), [])
+        this._object.ValueFound = result;
+        return this._object.NoOfResults || 0;
     }
 
-    private recursiveGet(currentValue: any, currentPathSegmentIndexes: PathSegmentsIndexes, currentPath: RecursiveDescentSegment): GetObjectResult {
-        const FunctionName = 'recursiveGet'
-
-        if (currentPathSegmentIndexes.CurrentRecursive > currentPathSegmentIndexes.LastRecursive || currentPathSegmentIndexes.CurrentCollection > currentPathSegmentIndexes.LastCollection) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'currentPathSegmentIndexes exhausted', currentPath, currentValue)
+    private recursiveGet(
+        currentValue: any,
+        currentPathSegmentIndexes: PathSegmentsIndexes,
+        currentPath: RecursiveDescentSegment
+    ): any {
+        if (
+            currentPathSegmentIndexes.CurrentRecursive > currentPathSegmentIndexes.LastRecursive ||
+            currentPathSegmentIndexes.CurrentCollection > currentPathSegmentIndexes.LastCollection
+        ) {
+            this._object.LastError = Object.assign(
+                new JsonError('indexes empty', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return currentValue;
         }
 
-        const recursiveSegment = this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive][currentPathSegmentIndexes.CurrentCollection]
-        if (!IsObjectLiteral(recursiveSegment)) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'recursive segment is empty', currentPath, currentValue)
+        const recursiveSegment =
+            this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive][
+                currentPathSegmentIndexes.CurrentCollection
+            ];
+        if (!IsDefined(recursiveSegment)) {
+            this._object.LastError = Object.assign(
+                new JsonError('recursiveSegment is not defined', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return currentValue;
         }
 
-        if (IsNullOrUndefined(currentValue)) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'current value null or undefined', currentPath, currentValue)
+        if (!IsDefined(currentValue)) {
+            this._object.LastError = Object.assign(
+                new JsonError('currentValue is not defined', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return undefined;
         }
 
         if (recursiveSegment.IsKeyRoot) {
             if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
                 if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
-                    return {
-                        Result: currentValue,
-                        Ok: true
-                    }
+                    this._object.NoOfResults += 1;
+                    return currentValue;
                 }
 
-                const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                    .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                    .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                    .WithCurrentCollection(0)
-                    .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                    .build()
+                const recursiveDescentIndexes = new PathSegmentsIndexes();
+                recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+                recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                recursiveDescentIndexes.CurrentCollection = 0;
+                recursiveDescentIndexes.LastCollection =
+                    (this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1] || [])
+                        .length - 1;
 
-                return this.recursiveDescentGet(currentValue, recursiveDescentIndexes, currentPath)
+                return this.recursiveDescentGet(currentValue, recursiveDescentIndexes, currentPath);
             }
 
-            const recursiveIndexes = PathSegmentsIndexes.create()
-                .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-                .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-                .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-                .build()
-
-            return this.recursiveGet(currentValue, recursiveIndexes, currentPath)
-        }
-
-        if (IsObjectLiteral(currentValue)) {
-            const currentDataKind = DataKinds.Object
-
-            if (recursiveSegment.IsKey && recursiveSegment.Key) {
-                const valueFromObjectLiteral = currentValue[recursiveSegment.Key]
-
-                if (currentPathSegmentIndexes.CurrentCollection == currentPathSegmentIndexes.LastCollection) {
-                    if (currentPathSegmentIndexes.CurrentRecursive == currentPathSegmentIndexes.LastRecursive) {
-                        if (!IsNullOrUndefined(valueFromObjectLiteral)) {
-                            return {
-                                Result: valueFromObjectLiteral,
-                                Ok: true
-                            }
-                        }
-                        throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `value of ${currentDataKind} entry ${recursiveSegment.Key} not valid`, currentPath, currentValue)
-                    }
-
-                    const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                        .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                        .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                        .WithCurrentCollection(0)
-                        .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                        .build()
-
-                    return this.recursiveDescentGet(valueFromObjectLiteral, recursiveDescentIndexes, [...currentPath, recursiveSegment])
-                }
-
-                const recursiveIndexes = PathSegmentsIndexes.create()
-                    .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-                    .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                    .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-                    .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-                    .build()
-
-                return this.recursiveGet(valueFromObjectLiteral, recursiveIndexes, [...currentPath, recursiveSegment])
-            }
-
-            if (recursiveSegment.IsKeyIndexAll || IsArrayAndNotEmpty(recursiveSegment.UnionSelector)) {
-                let selectorArray: any[] = []
-
-                if (recursiveSegment.IsKeyIndexAll) {
-                    for (const objectValue of Object.values(currentValue)) {
-                        if (!IsNullOrUndefined(objectValue)) {
-                            selectorArray.push(objectValue)
-                        }
-                    }
-                } else {
-                    for (const unionKey of recursiveSegment.UnionSelector!) {
-                        if (!unionKey.IsKey || !unionKey.Key) {
-                            continue
-                        }
-
-                        let valueFromObjectLiteral = currentValue[unionKey.Key]
-                        if (!IsNullOrUndefined(valueFromObjectLiteral)) {
-                            selectorArray.push(valueFromObjectLiteral)
-                        }
-                    }
-                }
-
-                return this.selectorLoop(currentDataKind, selectorArray, recursiveSegment, currentValue, currentPathSegmentIndexes, currentPath)
-            }
-
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, unsupported recursive segment ${CollectionMemberSegmentToString(recursiveSegment)}`, currentPath, currentValue)
+            const recursiveIndexes = new PathSegmentsIndexes();
+            recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+            recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+            recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+            recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
+            return this.recursiveGet(currentValue, recursiveIndexes, currentPath);
         }
 
         if (IsMap(currentValue)) {
-            const currentDataKind = DataKinds.Map
-            const objectFromCurrentValueMap = Object.fromEntries(currentValue as Map<any, any>)
+            const dataKind = DataKind.Map;
+            const objectFromCurrentValueMap = Object.fromEntries(currentValue as Map<any, any>);
 
-            if (recursiveSegment.IsKey && recursiveSegment.Key) {
-                const valueFromObjectLiteral = objectFromCurrentValueMap[recursiveSegment.Key]
+            if (IsDefined(recursiveSegment.Key) && !recursiveSegment.IsKeyIndexAll) {
+                const mapValue = objectFromCurrentValueMap[recursiveSegment.Key];
 
-                if (currentPathSegmentIndexes.CurrentCollection == currentPathSegmentIndexes.LastCollection) {
-                    if (currentPathSegmentIndexes.CurrentRecursive == currentPathSegmentIndexes.LastRecursive) {
-                        if (!IsNullOrUndefined(valueFromObjectLiteral)) {
-                            return {
-                                Result: valueFromObjectLiteral,
-                                Ok: true
-                            }
+                if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
+                    if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
+                        if (IsDefined(mapValue)) {
+                            this._object.NoOfResults += 1;
+                            return mapValue;
                         }
-                        throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `value of ${currentDataKind} entry ${recursiveSegment.Key} not valid`, currentPath, currentValue)
+                        this._object.LastError = Object.assign(
+                            new JsonError(
+                                `value of map entry not defined`,
+                                undefined,
+                                JSObjectErrorCodes.PathSegmentInvalid
+                            ),
+                            {
+                                Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                            }
+                        );
+                        return undefined;
                     }
 
-                    const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                        .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                        .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                        .WithCurrentCollection(0)
-                        .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                        .build()
+                    const recursiveDescentIndexes = new PathSegmentsIndexes();
+                    recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+                    recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                    recursiveDescentIndexes.CurrentCollection = 0;
+                    recursiveDescentIndexes.LastCollection =
+                        (this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1] || [])
+                            .length - 1;
 
-                    return this.recursiveDescentGet(valueFromObjectLiteral, recursiveDescentIndexes, [...currentPath, recursiveSegment])
+                    return this.recursiveDescentGet(mapValue, recursiveDescentIndexes, [
+                        ...currentPath,
+                        recursiveSegment
+                    ]);
                 }
 
-                const recursiveIndexes = PathSegmentsIndexes.create()
-                    .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-                    .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                    .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-                    .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-                    .build()
-
-                return this.recursiveGet(valueFromObjectLiteral, recursiveIndexes, [...currentPath, recursiveSegment])
+                const recursiveIndexes = new PathSegmentsIndexes();
+                recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+                recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+                recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
+                return this.recursiveGet(mapValue, recursiveIndexes, [...currentPath, recursiveSegment]);
             }
 
-            if (recursiveSegment.IsKeyIndexAll || IsArrayAndNotEmpty(recursiveSegment.UnionSelector)) {
-                let selectorArray: any[] = []
+            if (
+                recursiveSegment.IsKeyIndexAll ||
+                (IsArray(recursiveSegment.UnionSelector) && recursiveSegment.UnionSelector.length > 0)
+            ) {
+                let selectorSlice: any[] = [];
 
                 if (recursiveSegment.IsKeyIndexAll) {
-                    for (const objectValue of Object.values(objectFromCurrentValueMap)) {
-                        if (!IsNullOrUndefined(objectValue)) {
-                            selectorArray.push(objectValue)
+                    for (const keys of Object.keys(objectFromCurrentValueMap)) {
+                        const mapValue = objectFromCurrentValueMap[keys];
+                        if (IsDefined(mapValue)) {
+                            selectorSlice.push(mapValue);
                         }
                     }
                 } else {
                     for (const unionKey of recursiveSegment.UnionSelector!) {
-                        if (!unionKey.IsKey || !unionKey.Key) {
-                            continue
-                        }
-
-                        let valueFromObjectLiteral = objectFromCurrentValueMap[unionKey.Key]
-                        if (!IsNullOrUndefined(valueFromObjectLiteral)) {
-                            selectorArray.push(valueFromObjectLiteral)
+                        if (!IsString(unionKey.Key)) continue;
+                        const mapValue = objectFromCurrentValueMap[unionKey.Key];
+                        if (IsDefined(mapValue)) {
+                            selectorSlice.push(mapValue);
                         }
                     }
                 }
 
-                return this.selectorLoop(currentDataKind, selectorArray, recursiveSegment, currentValue, currentPathSegmentIndexes, currentPath)
+                return this.selectorGetLoop(
+                    dataKind,
+                    selectorSlice,
+                    recursiveSegment,
+                    currentValue,
+                    currentPathSegmentIndexes,
+                    currentPath
+                );
             }
 
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, unsupported recursive segment ${CollectionMemberSegmentToString(recursiveSegment)}`, currentPath, currentValue)
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `in ${dataKind} unsupported recursive segment ${recursiveSegment.toString()}`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+
+            return undefined;
         }
 
         if (IsArray(currentValue)) {
-            const currentDataKind = DataKinds.Array
+            const dataKind = DataKind.Array;
 
-            if (recursiveSegment.IsIndex && typeof recursiveSegment.Index == 'number') {
+            if (IsNumber(recursiveSegment.Index)) {
                 if (recursiveSegment.Index >= currentValue.length) {
-                    throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `in ${currentDataKind}, index ${CollectionMemberSegmentToString(recursiveSegment)} out of range`, currentPath, currentValue)
+                    this._object.LastError = Object.assign(
+                        new JsonError(
+                            `in ${dataKind}, ${recursiveSegment.toString()} out of bounds`,
+                            undefined,
+                            JSObjectErrorCodes.PathSegmentInvalid
+                        ),
+                        {
+                            Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                        }
+                    );
+                    return undefined;
                 }
 
-                const valueFromArray = currentValue[recursiveSegment.Index]
+                const arrayValue = currentValue[recursiveSegment.Index];
 
-                if (currentPathSegmentIndexes.CurrentCollection == currentPathSegmentIndexes.LastCollection) {
-                    if (currentPathSegmentIndexes.CurrentRecursive == currentPathSegmentIndexes.LastRecursive) {
-                        if (!IsNullOrUndefined(valueFromArray)) {
-                            return {
-                                Result: valueFromArray,
-                                Ok: true
-                            }
+                if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
+                    if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
+                        if (IsDefined(arrayValue)) {
+                            this._object.NoOfResults += 1;
+                            return arrayValue;
                         }
-                        throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `value in ${currentDataKind} at index ${recursiveSegment.Index} not valid`, currentPath, currentValue)
+                        this._object.LastError = Object.assign(
+                            new JsonError(
+                                `value of array entry not defined`,
+                                undefined,
+                                JSObjectErrorCodes.PathSegmentInvalid
+                            ),
+                            {
+                                Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                            }
+                        );
+                        return undefined;
                     }
 
-                    const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                        .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                        .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                        .WithCurrentCollection(0)
-                        .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                        .build()
+                    const recursiveDescentIndexes = new PathSegmentsIndexes();
+                    recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+                    recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                    recursiveDescentIndexes.CurrentCollection = 0;
+                    recursiveDescentIndexes.LastCollection =
+                        (this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1] || [])
+                            .length - 1;
 
-                    return this.recursiveDescentGet(valueFromArray, recursiveDescentIndexes, [...currentPath, recursiveSegment])
+                    return this.recursiveDescentGet(arrayValue, recursiveDescentIndexes, [
+                        ...currentPath,
+                        recursiveSegment
+                    ]);
                 }
 
-                const recursiveIndexes = PathSegmentsIndexes.create()
-                    .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-                    .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                    .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-                    .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-                    .build()
-
-                return this.recursiveGet(valueFromArray, recursiveIndexes, [...currentPath, recursiveSegment])
+                const recursiveIndexes = new PathSegmentsIndexes();
+                recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+                recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+                recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
+                return this.recursiveGet(arrayValue, recursiveIndexes, [...currentPath, recursiveSegment]);
             }
 
-            if (recursiveSegment.IsKeyIndexAll || IsArrayAndNotEmpty(recursiveSegment.UnionSelector) || IsObjectLiteralAndNotEmpty(recursiveSegment.LinearCollectionSelector)) {
-                let selectorArray: any[] = []
+            if (
+                recursiveSegment.IsKeyIndexAll ||
+                (IsArray(recursiveSegment.UnionSelector) && recursiveSegment.UnionSelector.length > 0) ||
+                recursiveSegment.LinearCollectionSelector
+            ) {
+                let selectorSlice: any[] = [];
 
                 if (recursiveSegment.IsKeyIndexAll) {
-                    for (const arrayElement of currentValue) {
-                        if (!IsNullOrUndefined(arrayElement)) {
-                            selectorArray.push(arrayElement)
+                    for (let i = 0; i < currentValue.length; i++) {
+                        const arrayValue = currentValue[i];
+                        if (IsDefined(arrayValue)) {
+                            selectorSlice.push(arrayValue);
                         }
                     }
-                } else if (IsArrayAndNotEmpty(recursiveSegment.UnionSelector)) {
-                    for (const unionKey of recursiveSegment.UnionSelector!) {
-                        if (!unionKey.IsIndex || typeof unionKey.Index != 'number' || unionKey.Index >= currentValue.length) {
-                            continue
-                        }
-
-                        let valueFromArray = currentValue[unionKey.Index]
-                        if (!IsNullOrUndefined(valueFromArray)) {
-                            selectorArray.push(valueFromArray)
-                        }
+                } else if (recursiveSegment.LinearCollectionSelector) {
+                    let start = 0;
+                    if (IsNumber(recursiveSegment.LinearCollectionSelector!.Start)) {
+                        start = recursiveSegment.LinearCollectionSelector!.Start;
                     }
-                } else {
-                    let start = 0
-                    if (recursiveSegment.LinearCollectionSelector!.IsStart && typeof recursiveSegment.LinearCollectionSelector!.Start === 'number') {
-                        if (recursiveSegment.LinearCollectionSelector!.Start >= currentValue.length) {
-                            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, linear collection selector ${CollectionMemberSegmentToString(recursiveSegment)} Start is out of range`, currentPath, currentValue)
-                        }
-                        start = recursiveSegment.LinearCollectionSelector!.Start
+                    let step = 1;
+                    if (IsNumber(recursiveSegment.LinearCollectionSelector!.Step)) {
+                        step = recursiveSegment.LinearCollectionSelector!.Step;
                     }
-                    let step = 1
-                    if (recursiveSegment.LinearCollectionSelector!.IsStep && typeof recursiveSegment.LinearCollectionSelector!.Step === 'number') {
-                        if (recursiveSegment.LinearCollectionSelector!.Step >= currentValue.length) {
-                            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, linear collection selector ${CollectionMemberSegmentToString(recursiveSegment)} Step is out of range`, currentPath, currentValue)
-                        }
-                        step = recursiveSegment.LinearCollectionSelector!.Step
-                    }
-                    let end = currentValue.length
-                    if (recursiveSegment.LinearCollectionSelector!.IsEnd && typeof recursiveSegment.LinearCollectionSelector!.End === 'number') {
-                        if (recursiveSegment.LinearCollectionSelector!.End >= currentValue.length) {
-                            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, linear collection selector ${CollectionMemberSegmentToString(recursiveSegment)} End is out of range`, currentPath, currentValue)
-                        }
-                        end = recursiveSegment.LinearCollectionSelector!.End
+                    let end = currentValue.length;
+                    if (IsNumber(recursiveSegment.LinearCollectionSelector!.End)) {
+                        end = recursiveSegment.LinearCollectionSelector!.End;
                     }
 
                     for (let i = start; i < end; i += step) {
-                        if (i >= currentValue.length) {
-                            continue
+                        if (i >= currentValue.length) continue;
+                        const arrayValue = currentValue[i];
+                        if (IsDefined(arrayValue)) {
+                            selectorSlice.push(arrayValue);
                         }
-
-                        let valueFromArray = currentValue[i]
-                        if (!IsNullOrUndefined(valueFromArray)) {
-                            selectorArray.push(valueFromArray)
+                    }
+                } else {
+                    for (const unionKey of recursiveSegment.UnionSelector!) {
+                        if (!IsNumber(unionKey.Index) || unionKey.Index >= currentValue.length) continue;
+                        const arrayValue = currentValue[unionKey.Index];
+                        if (IsDefined(arrayValue)) {
+                            selectorSlice.push(arrayValue);
                         }
                     }
                 }
 
-                return this.selectorLoop(currentDataKind, selectorArray, recursiveSegment, currentValue, currentPathSegmentIndexes, currentPath)
+                return this.selectorGetLoop(
+                    dataKind,
+                    selectorSlice,
+                    recursiveSegment,
+                    currentValue,
+                    currentPathSegmentIndexes,
+                    currentPath
+                );
             }
 
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, unsupported recursive segment ${CollectionMemberSegmentToString(recursiveSegment)}`, currentPath, currentValue)
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `in ${dataKind} unsupported recursive segment ${recursiveSegment.toString()}`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+
+            return undefined;
         }
 
         if (IsSet(currentValue)) {
-            const currentDataKind = DataKinds.Set
+            return this.recursiveGet(Array.from(currentValue), currentPathSegmentIndexes, currentPath);
+        }
 
-            if (recursiveSegment.IsKeyIndexAll) {
-                let selectorArray: any[] = []
+        // if (IsSet(currentValue)) {
+        //     const dataKind = DataKind.Set;
 
-                for (const setEntry of currentValue as Set<any>) {
-                    if (!IsNullOrUndefined(setEntry)) {
-                        selectorArray.push(setEntry)
+        //     if (recursiveSegment.IsKeyIndexAll) {
+        //         let selectorSlice: any[] = [];
+
+        //         const arrayFromSet = Array.from<any>(currentValue)
+        //         for (let i = 0; i < arrayFromSet.length; i++) {
+        //             const setValue = arrayFromSet[i];
+        //             if (IsDefined(setValue)) {
+        //                 selectorSlice.push(setValue);
+        //             }
+        //         }
+
+        //         return this.selectorGetLoop(dataKind, selectorSlice, recursiveSegment, currentValue, currentPathSegmentIndexes, currentPath)
+        //     }
+
+        //     this._object.LastError = Object.assign(new JsonError(`in ${dataKind} unsupported recursive segment ${recursiveSegment.toString()}`, undefined, JSObjectErrorCodes.PathSegmentInvalid), {
+        //         Data: {"CurrentValue": currentValue, "CurrentPathSegment": currentPath}
+        //     })
+
+        //     return undefined;
+        // }
+
+        if (IsObject(currentValue)) {
+            const dataKind = DataKind.Object;
+
+            if (IsDefined(recursiveSegment.Key) && !recursiveSegment.IsKeyIndexAll) {
+                const pojoValue = (currentValue as any)[recursiveSegment.Key];
+
+                if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
+                    if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
+                        if (IsDefined(pojoValue)) {
+                            this._object.NoOfResults += 1;
+                            return pojoValue;
+                        }
+                        this._object.LastError = Object.assign(
+                            new JsonError(
+                                `value of pojo entry not defined`,
+                                undefined,
+                                JSObjectErrorCodes.PathSegmentInvalid
+                            ),
+                            {
+                                Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                            }
+                        );
+                        return undefined;
+                    }
+
+                    const recursiveDescentIndexes = new PathSegmentsIndexes();
+                    recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+                    recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                    recursiveDescentIndexes.CurrentCollection = 0;
+                    recursiveDescentIndexes.LastCollection =
+                        (this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1] || [])
+                            .length - 1;
+
+                    return this.recursiveDescentGet(pojoValue, recursiveDescentIndexes, [
+                        ...currentPath,
+                        recursiveSegment
+                    ]);
+                }
+
+                const recursiveIndexes = new PathSegmentsIndexes();
+                recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+                recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+                recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
+                return this.recursiveGet(pojoValue, recursiveIndexes, [...currentPath, recursiveSegment]);
+            }
+
+            if (
+                recursiveSegment.IsKeyIndexAll ||
+                (IsArray(recursiveSegment.UnionSelector) && recursiveSegment.UnionSelector.length > 0)
+            ) {
+                let selectorSlice: any[] = [];
+
+                if (recursiveSegment.IsKeyIndexAll) {
+                    for (const keys of Object.keys(currentValue)) {
+                        const pojoValue = (currentValue as any)[keys];
+                        if (IsDefined(pojoValue)) {
+                            selectorSlice.push(pojoValue);
+                        }
+                    }
+                } else {
+                    for (const unionKey of recursiveSegment.UnionSelector!) {
+                        if (!IsString(unionKey.Key)) continue;
+                        const pojoValue = (currentValue as any)[unionKey.Key];
+                        if (IsDefined(pojoValue)) {
+                            selectorSlice.push(pojoValue);
+                        }
                     }
                 }
 
-                return this.selectorLoop(currentDataKind, selectorArray, recursiveSegment, currentValue, currentPathSegmentIndexes, currentPath)
+                return this.selectorGetLoop(
+                    dataKind,
+                    selectorSlice,
+                    recursiveSegment,
+                    currentValue,
+                    currentPathSegmentIndexes,
+                    currentPath
+                );
             }
 
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `in ${currentDataKind}, unsupported recursive segment ${CollectionMemberSegmentToString(recursiveSegment)}`, currentPath, currentValue)
-        }
-
-        throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'unsupported value at recursive segment', currentPath, currentValue)
-    }
-    
-    private selectorLoop(dataKind: DataKind, selectorArray: any, recursiveSegment: CollectionMemberSegment, currentValue: any, currentPathSegmentIndexes: PathSegmentsIndexes, currentPath: RecursiveDescentSegment): GetObjectResult {
-        const FunctionName = 'selectorLoop'
-        
-        if (selectorArray.length === 0) {
-            throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `in ${dataKind}, selector ${CollectionMemberSegmentToString(recursiveSegment)} yielded no results`, currentPath, currentValue)
-        }
-
-        if (currentPathSegmentIndexes.CurrentCollection == currentPathSegmentIndexes.LastCollection) {
-            if (currentPathSegmentIndexes.CurrentRecursive == currentPathSegmentIndexes.LastRecursive) {
-                return {
-                    Result: selectorArray,
-                    Ok: true
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `in ${dataKind} unsupported recursive segment ${recursiveSegment.toString()}`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
                 }
-            }
+            );
 
-            const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                .WithCurrentCollection(0)
-                .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                .build()
-
-            return this.recursiveDescentGet(selectorArray, recursiveDescentIndexes, [...currentPath, recursiveSegment])
+            return undefined;
         }
 
-        const recursiveIndexes = PathSegmentsIndexes.create()
-            .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-            .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-            .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-            .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-            .build()
-
-        let newArrayResult: any[] = []
-        for (const selectorArrayElement of selectorArray) {
-            try {
-                const v = this.recursiveGet(selectorArrayElement, recursiveIndexes, [...currentPath, recursiveSegment])
-                if (v && v.Ok) {
-                    newArrayResult = this.flattenNewArrayResult(newArrayResult, currentPathSegmentIndexes, v.Result)
-                }
-            } catch (e) {
-            }
-        }
-
-        if (newArrayResult.length === 0) {
-            throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `in ${dataKind}, recursively working with selector ${CollectionMemberSegmentToString(recursiveSegment)} results yielded no ok results`, currentPath, currentValue)
-        }
-
-        return {
-            Result: newArrayResult,
-            Ok: true
-        }
+        return undefined;
     }
 
-    /**
-     * Convert nested array result {@link v} from {@link recursiveGet} into a single 1D array if the next path segment contains {@link IsKeyIndexAll}, {@link CollectionMemberSegment.UnionSelector}, or {@link CollectionMemberSegment.LinearCollectionSelector}.
-     * */
-    private flattenNewArrayResult(newArrayResult: any[], indexes: PathSegmentsIndexes, v: any): any[] {
-        if (indexes.CurrentCollection < indexes.LastCollection) {
-            if (IsArray(v)) {
-                if (this._recursiveDescentSegments[indexes.CurrentRecursive][indexes.CurrentCollection + 1].IsKeyIndexAll || IsArrayAndNotEmpty(this._recursiveDescentSegments[indexes.CurrentRecursive][indexes.CurrentCollection + 1].UnionSelector) || IsObjectLiteral(this._recursiveDescentSegments[indexes.CurrentRecursive][indexes.CurrentCollection + 1].LinearCollectionSelector)) {
-                    return [...newArrayResult, ...v]
+    private selectorGetLoop(
+        dataKind: DataKind | string,
+        selectorSlice: any,
+        recursiveSegment: CollectionMemberSegment,
+        currentValue: any,
+        currentPathSegmentIndexes: PathSegmentsIndexes,
+        currentPath: RecursiveDescentSegment
+    ): any {
+        if (!Array.isArray(selectorSlice) || selectorSlice.length === 0) {
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `in ${dataKind}, selector yielded no results`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
                 }
+            );
+            return undefined;
+        }
+
+        if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
+            if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
+                this._object.NoOfResults = selectorSlice.length;
+                return selectorSlice;
+            }
+
+            const recursiveDescentIndexes = new PathSegmentsIndexes();
+            recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+            recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+            recursiveDescentIndexes.CurrentCollection = 0;
+            recursiveDescentIndexes.LastCollection =
+                (this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1] || []).length -
+                1;
+
+            return this.recursiveDescentGet(selectorSlice, recursiveDescentIndexes, [...currentPath, recursiveSegment]);
+        }
+
+        const recursiveIndexes = new PathSegmentsIndexes();
+        recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+        recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+        recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+        recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
+
+        let newSliceResult: any[] = [];
+        for (let i = 0; i < selectorSlice.length; i++) {
+            const v = this.recursiveGet(selectorSlice[i], recursiveIndexes, [...currentPath, recursiveSegment]);
+            if (v !== undefined) {
+                newSliceResult = this.flattenNewSliceResult(newSliceResult, currentPathSegmentIndexes, v);
             }
         }
 
-        newArrayResult.push(v)
-        return newArrayResult
+        if (newSliceResult.length === 0) {
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `in ${dataKind}, recursively working with selector ${recursiveSegment.toString()} yielded no results`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return undefined;
+        }
+
+        this._object.NoOfResults = newSliceResult.length;
+        return newSliceResult;
     }
 
-    private recursiveDescentGet(currentValue: any, currentPathSegmentIndexes: PathSegmentsIndexes, currentPath: RecursiveDescentSegment): GetObjectResult {
-        const FunctionName = 'recursiveDescentGet'
+    private recursiveDescentGet(
+        currentValue: any,
+        currentPathSegmentIndexes: PathSegmentsIndexes,
+        currentPath: RecursiveDescentSegment
+    ): any {
+        let valueFound: any[] = [];
 
-        let valueFound: any[] = []
-
-        if (currentPathSegmentIndexes.CurrentRecursive > currentPathSegmentIndexes.LastRecursive || currentPathSegmentIndexes.CurrentCollection > currentPathSegmentIndexes.LastCollection) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'currentPathSegmentIndexes exhausted', currentPath, currentValue)
+        if (
+            currentPathSegmentIndexes.CurrentRecursive > currentPathSegmentIndexes.LastRecursive ||
+            currentPathSegmentIndexes.CurrentCollection > currentPathSegmentIndexes.LastCollection
+        ) {
+            this._object.LastError = Object.assign(
+                new JsonError('indexes empty', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return undefined;
         }
 
-        const recursiveDescentSearchSegment = this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive][currentPathSegmentIndexes.CurrentCollection]
-        if (!IsObjectLiteral(recursiveDescentSearchSegment)) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'recursive descent search segment is empty', currentPath, currentValue)
+        const recursiveDescentSearchSegment =
+            this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive][
+                currentPathSegmentIndexes.CurrentCollection
+            ];
+        if (!recursiveDescentSearchSegment) {
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    'recursive descent search segment is not defined',
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return undefined;
         }
 
-        if (IsNullOrUndefined(currentValue)) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, 'current value null or undefined', currentPath, currentValue)
+        if (!IsDefined(currentValue)) {
+            this._object.LastError = Object.assign(
+                new JsonError('current value is not defined', undefined, JSObjectErrorCodes.PathSegmentInvalid),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
+            return undefined;
         }
 
         if (recursiveDescentSearchSegment.IsKeyRoot) {
-            return this.recursiveGet(currentValue, currentPathSegmentIndexes, [...currentPath, recursiveDescentSearchSegment])
+            return this.recursiveGet(currentValue, currentPathSegmentIndexes, currentPath);
         }
 
-        if (!recursiveDescentSearchSegment.IsKey) {
-            throw new ObjectError(ObjectErrorCodes.PathSegmentInvalid, FunctionName, `recursive descent search segment ${CollectionMemberSegmentToString(recursiveDescentSearchSegment)} is not key`, currentPath, currentValue)
-        }
-
-        if (IsArray(currentValue)) {
-            for (let i = 0; i < currentValue.length; i++) {
-                const valueFromArray = currentValue[i]
-                if (IsNullOrUndefined(valueFromArray)) {
-                    continue
+        if (!IsString(recursiveDescentSearchSegment.Key)) {
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `recursive descent search segment ${recursiveDescentSearchSegment.toString()} is not a string`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
                 }
+            );
+            return undefined;
+        }
 
-                try {
-                    const recursiveDescentValue = this.recursiveDescentGet(valueFromArray, currentPathSegmentIndexes, [...currentPath, {
-                        Index: i,
-                        IsIndex: true
-                    }])
-                    if (recursiveDescentValue && recursiveDescentValue.Ok) {
-                        if (IsArray(recursiveDescentValue.Result)) {
-                            valueFound = [...valueFound, ...recursiveDescentValue.Result]
+        if (IsMap(currentValue)) {
+            for (const mapKey of Array.from(currentValue.keys())) {
+                const keyPathSegment = new CollectionMemberSegment();
+                keyPathSegment.Key = String(mapKey);
+
+                const mapValue = currentValue.get(mapKey);
+
+                if (!IsDefined(mapValue)) continue;
+
+                if (keyPathSegment.Key === recursiveDescentSearchSegment.Key) {
+                    if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
+                        if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
+                            valueFound.push(mapValue);
                         } else {
-                            valueFound.push(recursiveDescentValue.Result)
+                            const recursiveDescentIndexes = new PathSegmentsIndexes();
+                            recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+                            recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                            recursiveDescentIndexes.CurrentCollection = 0;
+                            recursiveDescentIndexes.LastCollection =
+                                (
+                                    this._object.RecursiveDescentSegments[
+                                        currentPathSegmentIndexes.CurrentRecursive + 1
+                                    ] || []
+                                ).length - 1;
+
+                            const recursiveDescentValue = this.recursiveDescentGet(mapValue, recursiveDescentIndexes, [
+                                ...currentPath,
+                                keyPathSegment
+                            ]);
+                            if (IsArray(recursiveDescentValue) && recursiveDescentValue.length > 0) {
+                                valueFound.push(...recursiveDescentValue);
+                            } else {
+                                this._object.NoOfResults = valueFound.length;
+                                return valueFound;
+                            }
+                        }
+                    } else {
+                        const recursiveIndexes = new PathSegmentsIndexes();
+                        recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+                        recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                        recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+                        recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
+
+                        const recursiveValue = this.recursiveGet(mapValue, recursiveIndexes, [
+                            ...currentPath,
+                            keyPathSegment
+                        ]);
+                        if (IsArray(recursiveValue) && recursiveValue.length > 0) {
+                            valueFound.push(...recursiveValue);
+                        } else {
+                            this._object.NoOfResults = valueFound.length;
+                            return valueFound;
                         }
                     }
-                } catch (e) {
+                }
+
+                const recursiveDescentValue = this.recursiveDescentGet(mapValue, currentPathSegmentIndexes, [
+                    ...currentPath,
+                    keyPathSegment
+                ]);
+                if (IsArray(recursiveDescentValue) && recursiveDescentValue.length > 0) {
+                    valueFound.push(...recursiveDescentValue);
+                }
+            }
+        } else if (IsArray(currentValue)) {
+            for (let i = 0; i < currentValue.length; i++) {
+                const arrayValue = currentValue[i];
+                if (!IsDefined(arrayValue)) continue;
+
+                const arrayIndexPathSegment = new CollectionMemberSegment();
+                arrayIndexPathSegment.Index = i;
+
+                const recursiveDescentValue = this.recursiveDescentGet(arrayValue, currentPathSegmentIndexes, [
+                    ...currentPath,
+                    arrayIndexPathSegment
+                ]);
+                if (IsArray(recursiveDescentValue) && recursiveDescentValue.length > 0) {
+                    valueFound.push(...recursiveDescentValue);
                 }
             }
         } else if (IsSet(currentValue)) {
-            let i = 0
-            for (const setEntry of currentValue as Set<any>) {
-                if (IsNullOrUndefined(setEntry)) {
-                    continue
-                }
+            const arrayFromSet = Array.from<any>(currentValue);
+            for (let i = 0; i < arrayFromSet.length; i++) {
+                const arrayValue = arrayFromSet[i];
+                if (!IsDefined(arrayValue)) continue;
+                const arrayIndexPathSegment = new CollectionMemberSegment();
+                arrayIndexPathSegment.Index = i;
 
-                try {
-                    const recursiveDescentValue = this.recursiveDescentGet(setEntry, currentPathSegmentIndexes, [...currentPath, {
-                        Index: i,
-                        IsIndex: true
-                    }])
-                    if (recursiveDescentValue && recursiveDescentValue.Ok) {
-                        if (IsArray(recursiveDescentValue.Result)) {
-                            valueFound = [...valueFound, ...recursiveDescentValue.Result]
-                        } else {
-                            valueFound.push(recursiveDescentValue.Result)
-                        }
-                    }
-                } catch (e) {
+                const recursiveDescentValue = this.recursiveDescentGet(arrayValue, currentPathSegmentIndexes, [
+                    ...currentPath,
+                    arrayIndexPathSegment
+                ]);
+                if (IsArray(recursiveDescentValue) && recursiveDescentValue.length > 0) {
+                    valueFound.push(...recursiveDescentValue);
                 }
             }
-        } else if (IsMap(currentValue)) {
-            for (const [objectKey, objectValue] of Object.entries(Object.fromEntries(currentValue as Map<any, any>))) {
-                if (IsNullOrUndefined(objectValue)) {
-                    continue
-                }
+        } else if (IsObject(currentValue)) {
+            for (const pojoKey of Object.keys(currentValue)) {
+                const keyPathSegment = new CollectionMemberSegment();
+                keyPathSegment.Key = String(pojoKey);
 
-                const pathSegment = CollectionMemberSegment.create().WithIsKey(true).WithKey(this.MapKeyString(objectKey)).build()
-                const nextPathSegments = [...currentPath, pathSegment]
+                const pojoValue = (currentValue as any)[pojoKey];
 
-                if (pathSegment.Key === recursiveDescentSearchSegment.Key) {
+                if (!IsDefined(pojoValue)) continue;
+
+                if (keyPathSegment.Key === recursiveDescentSearchSegment.Key) {
                     if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
                         if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
-                            valueFound.push(objectValue)
+                            valueFound.push(pojoValue);
                         } else {
-                            try {
-                                const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                                    .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                                    .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                                    .WithCurrentCollection(0)
-                                    .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                                    .build()
+                            const recursiveDescentIndexes = new PathSegmentsIndexes();
+                            recursiveDescentIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive + 1;
+                            recursiveDescentIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                            recursiveDescentIndexes.CurrentCollection = 0;
+                            recursiveDescentIndexes.LastCollection =
+                                (
+                                    this._object.RecursiveDescentSegments[
+                                        currentPathSegmentIndexes.CurrentRecursive + 1
+                                    ] || []
+                                ).length - 1;
 
-                                const recursiveDescentValue = this.recursiveDescentGet(objectValue, recursiveDescentIndexes, nextPathSegments)
-                                if (recursiveDescentValue && recursiveDescentValue.Ok) {
-                                    if (IsArray(recursiveDescentValue.Result)) {
-                                        valueFound = [...valueFound, ...recursiveDescentValue.Result]
-                                    } else {
-                                        valueFound.push(recursiveDescentValue.Result)
-                                    }
-                                }
-                            } catch (e) {
+                            const recursiveDescentValue = this.recursiveDescentGet(pojoValue, recursiveDescentIndexes, [
+                                ...currentPath,
+                                keyPathSegment
+                            ]);
+                            if (IsArray(recursiveDescentValue) && recursiveDescentValue.length > 0) {
+                                valueFound.push(...recursiveDescentValue);
+                            } else {
+                                this._object.NoOfResults = valueFound.length;
+                                return valueFound;
                             }
                         }
                     } else {
-                        try {
-                            const recursiveIndexes = PathSegmentsIndexes.create()
-                                .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-                                .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                                .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-                                .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-                                .build()
+                        const recursiveIndexes = new PathSegmentsIndexes();
+                        recursiveIndexes.CurrentRecursive = currentPathSegmentIndexes.CurrentRecursive;
+                        recursiveIndexes.LastRecursive = currentPathSegmentIndexes.LastRecursive;
+                        recursiveIndexes.CurrentCollection = currentPathSegmentIndexes.CurrentCollection + 1;
+                        recursiveIndexes.LastCollection = currentPathSegmentIndexes.LastCollection;
 
-                            const recursiveValue = this.recursiveGet(objectValue, recursiveIndexes, nextPathSegments)
-                            if (recursiveValue && recursiveValue.Ok) {
-                                if (IsArray(recursiveValue.Result)) {
-                                    valueFound = [...valueFound, ...recursiveValue.Result]
-                                } else {
-                                    valueFound.push(recursiveValue.Result)
-                                }
-                            }
-                        } catch (e) {
-                        }
-                    }
-                }
-
-                try {
-                    const recursiveDescentValue = this.recursiveDescentGet(objectValue, currentPathSegmentIndexes, nextPathSegments)
-                    if (recursiveDescentValue && recursiveDescentValue.Ok) {
-                        if (IsArray(recursiveDescentValue.Result)) {
-                            valueFound = [...valueFound, ...recursiveDescentValue.Result]
+                        const recursiveValue = this.recursiveGet(pojoValue, recursiveIndexes, [
+                            ...currentPath,
+                            keyPathSegment
+                        ]);
+                        if (IsArray(recursiveValue) && recursiveValue.length > 0) {
+                            valueFound.push(...recursiveValue);
                         } else {
-                            valueFound.push(recursiveDescentValue.Result)
-                        }
-                    }
-                } catch (e) {
-                }
-            }
-        } else if (IsObjectLiteral(currentValue)) {
-            for (const [objectKey, objectValue] of Object.entries(currentValue)) {
-                if (IsNullOrUndefined(objectValue)) {
-                    continue
-                }
-
-                const pathSegment = CollectionMemberSegment.create().WithIsKey(true).WithKey(this.MapKeyString(objectKey)).build()
-                const nextPathSegments = [...currentPath, pathSegment]
-
-                if (pathSegment.Key === recursiveDescentSearchSegment.Key) {
-                    if (currentPathSegmentIndexes.CurrentCollection === currentPathSegmentIndexes.LastCollection) {
-                        if (currentPathSegmentIndexes.CurrentRecursive === currentPathSegmentIndexes.LastRecursive) {
-                            valueFound.push(objectValue)
-                        } else {
-                            try {
-                                const recursiveDescentIndexes = PathSegmentsIndexes.create()
-                                    .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive + 1)
-                                    .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                                    .WithCurrentCollection(0)
-                                    .WithLastCollection(this._recursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive + 1].length - 1)
-                                    .build()
-
-                                const recursiveDescentValue = this.recursiveDescentGet(objectValue, recursiveDescentIndexes, nextPathSegments)
-                                if (recursiveDescentValue && recursiveDescentValue.Ok) {
-                                    if (IsArray(recursiveDescentValue.Result)) {
-                                        valueFound = [...valueFound, ...recursiveDescentValue.Result]
-                                    } else {
-                                        valueFound.push(recursiveDescentValue.Result)
-                                    }
-                                }
-                            } catch (e) {
-                            }
-                        }
-                    } else {
-                        try {
-                            const recursiveIndexes = PathSegmentsIndexes.create()
-                                .WithCurrentRecursive(currentPathSegmentIndexes.CurrentRecursive)
-                                .WithLastRecursive(currentPathSegmentIndexes.LastRecursive)
-                                .WithCurrentCollection(currentPathSegmentIndexes.CurrentCollection + 1)
-                                .WithLastCollection(currentPathSegmentIndexes.LastCollection)
-                                .build()
-
-                            const recursiveValue = this.recursiveGet(objectValue, recursiveIndexes, nextPathSegments)
-                            if (recursiveValue && recursiveValue.Ok) {
-                                if (IsArray(recursiveValue.Result)) {
-                                    valueFound = [...valueFound, ...recursiveValue.Result]
-                                } else {
-                                    valueFound.push(recursiveValue.Result)
-                                }
-                            }
-                        } catch (e) {
+                            this._object.NoOfResults = valueFound.length;
+                            return valueFound;
                         }
                     }
                 }
 
-                try {
-                    const recursiveDescentValue = this.recursiveDescentGet(objectValue, currentPathSegmentIndexes, nextPathSegments)
-                    if (recursiveDescentValue && recursiveDescentValue.Ok) {
-                        if (IsArray(recursiveDescentValue.Result)) {
-                            valueFound = [...valueFound, ...recursiveDescentValue.Result]
-                        } else {
-                            valueFound.push(recursiveDescentValue.Result)
-                        }
-                    }
-                } catch (e) {
+                const recursiveDescentValue = this.recursiveDescentGet(pojoValue, currentPathSegmentIndexes, [
+                    ...currentPath,
+                    keyPathSegment
+                ]);
+                if (IsArray(recursiveDescentValue) && recursiveDescentValue.length > 0) {
+                    valueFound.push(...recursiveDescentValue);
                 }
             }
         } else {
-            throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `unsupported value at recursive descent search segment ${CollectionMemberSegmentToString(recursiveDescentSearchSegment)}`, currentPath, currentValue)
+            this._object.LastError = Object.assign(
+                new JsonError(
+                    `unsuppored recursive descent search segment ${recursiveDescentSearchSegment.toString()}`,
+                    undefined,
+                    JSObjectErrorCodes.PathSegmentInvalid
+                ),
+                {
+                    Data: { CurrentValue: currentValue, CurrentPathSegment: currentPath }
+                }
+            );
         }
 
-        if (valueFound.length === 0) {
-            throw new ObjectError(ObjectErrorCodes.ValueAtPathSegmentInvalid, FunctionName, `no search value found at recursive descent search segment ${CollectionMemberSegmentToString(recursiveDescentSearchSegment)}`, currentPath, currentValue)
-        }
+        if (valueFound.length === 0) return undefined;
 
-        return {
-            Result: valueFound,
-            Ok: true
+        this._object.NoOfResults = valueFound.length;
+        return valueFound;
+    }
+
+    private flattenNewSliceResult(newSliceResult: any, currentPathSegmentIndexes: PathSegmentsIndexes, v: any): any {
+        if (currentPathSegmentIndexes.CurrentCollection < currentPathSegmentIndexes.LastCollection) {
+            if (Array.isArray(v)) {
+                const nextSegment =
+                    this._object.RecursiveDescentSegments[currentPathSegmentIndexes.CurrentRecursive][
+                        currentPathSegmentIndexes.CurrentCollection + 1
+                    ];
+                if (
+                    nextSegment &&
+                    (nextSegment.IsKeyIndexAll ||
+                        (nextSegment.UnionSelector && nextSegment.UnionSelector.length > 0) ||
+                        nextSegment.LinearCollectionSelector)
+                ) {
+                    newSliceResult.push(...v);
+                    return newSliceResult;
+                }
+            }
         }
+        newSliceResult.push(v);
+        return newSliceResult;
     }
 }

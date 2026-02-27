@@ -1,31 +1,42 @@
-import type {JSONPath} from './core.ts'
-import {memberDotNotationPatternRegex} from './__internal__'
+import { memberDotNotationPatternRegex } from './__internal__';
+import type { JSONPath } from './core';
 
+/*
+SplitPathSegmentByDotNotationPattern splits a path segment into smaller segments using the dot ('.') delimiter.
+
+This function is typically called after splitting by recursive descent. It respects brackets and quotes,
+ensuring that dots inside string literals or bracket notation are not treated as delimiters.
+*/
 export function SplitPathSegmentByDotNotationPattern(jsonPath: JSONPath): JSONPath[] {
-    let dotNotationPaths: JSONPath[] = []
+    const dotNotationPaths: JSONPath[] = [];
+    const regex = new RegExp(memberDotNotationPatternRegex, 'g');
 
-    let matches = jsonPath.matchAll(memberDotNotationPatternRegex)
+    const matches: RegExpExecArray[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(jsonPath)) !== null) {
+        matches.push(match);
+    }
 
-    let memberDotNotationIndexes: number[][] = []
+    const memberDotNotationIndexes: [number, number][] = [];
     for (const match of matches) {
-        if (match[1] == '.') {
-            memberDotNotationIndexes.push([match.index, match.index + match[1].length])
+        if (match[1]) {
+            memberDotNotationIndexes.push([match.index, match.index + match[0].length]);
         }
     }
 
     if (memberDotNotationIndexes.length > 0) {
-        let start = 0
-        for (const memberDotNotationIndex of memberDotNotationIndexes) {
-            dotNotationPaths.push(jsonPath.slice(start, memberDotNotationIndex[0]))
-            start = memberDotNotationIndex[1]
+        let start = 0;
+        for (const index of memberDotNotationIndexes) {
+            dotNotationPaths.push(jsonPath.substring(start, index[0]));
+            start = index[1];
         }
 
-        if (start != jsonPath.length) {
-            dotNotationPaths.push(jsonPath.slice(start))
+        if (start !== jsonPath.length) {
+            dotNotationPaths.push(jsonPath.substring(start));
         }
     } else {
-        dotNotationPaths.push(jsonPath)
+        dotNotationPaths.push(jsonPath);
     }
 
-    return dotNotationPaths
+    return dotNotationPaths;
 }

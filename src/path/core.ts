@@ -1,185 +1,206 @@
-/**Alias for string intended to represent JSON path.*/
-export type JSONPath = string
-
-/**alias that represents the final deconstructed JSONPath string using {@linkcode Parse}.*/
-export type RecursiveDescentSegments = RecursiveDescentSegment[]
-
-/**alias that represents a sequence of recursive descent segments.*/
-export type RecursiveDescentSegment = CollectionMemberSegment[]
+import { getJsonKey } from './__internal__';
 
 /**
- * For Path linear collections (slices and arrays) selector in JSON Path like this: [start:end:step]
- * */
+ * JSONPath is an alias for a string intended to represent a JSON path query.
+ *
+ * Example: `$.store.book[0].title`
+ */
+export type JSONPath = string;
+
+/**
+ * Represents the final deconstructed JSONPath string after parsing.
+ *
+ * It is a 2D slice where the first dimension separates segments by the recursive descent operator `..`.
+ */
+export type RecursiveDescentSegments = RecursiveDescentSegment[];
+
+/**
+ * Represents a sequence of path segments that are directly connected
+ * (e.g. by dot notation or brackets) without any recursive descent operators.
+ */
+export type RecursiveDescentSegment = CollectionMemberSegment[];
+
 export class LinearCollectionSelector {
-    public Start?: number
-    public IsStart?: boolean
-    public End?: number
-    public IsEnd?: boolean
-    public Step?: number
-    public IsStep?: boolean
-
-    private constructor(builder: LinearCollectionSelectorBuilder) {
-        Object.assign(this, builder)
+    /**
+     * Start index for the slice (inclusive).
+     */
+    private _Start?: number;
+    public get Start(): number | undefined {
+        return this._Start;
+    }
+    public set Start(value: number | undefined) {
+        this._Start = value;
     }
 
-    public static create(): LinearCollectionSelectorBuilder {
-        return new LinearCollectionSelectorBuilder()
+    /**
+     * End index for the slice (exclusive).
+     */
+    private _End?: number;
+    public get End(): number | undefined {
+        return this._End;
     }
-}
-
-export class LinearCollectionSelectorBuilder {
-    public build(): LinearCollectionSelector {
-        return new (LinearCollectionSelector as any)(this) as LinearCollectionSelector
-    }
-
-    public Start?: number
-
-    public WithStart(value?: number): LinearCollectionSelectorBuilder {
-        this.Start = value
-        return this
+    public set End(value: number | undefined) {
+        this._End = value;
     }
 
-    public IsStart?: boolean
-
-    public WithIsStart(value?: boolean): LinearCollectionSelectorBuilder {
-        this.IsStart = value
-        return this
+    /**
+     * Step for the slice.
+     */
+    private _Step?: number;
+    public get Step(): number | undefined {
+        return this._Step;
+    }
+    public set Step(value: number | undefined) {
+        this._Step = value;
     }
 
-    public End?: number
-
-    public WithEnd(value?: number): LinearCollectionSelectorBuilder {
-        this.End = value
-        return this
-    }
-
-    public IsEnd?: boolean
-
-    public WithIsEnd(value?: boolean): LinearCollectionSelectorBuilder {
-        this.IsEnd = value
-        return this
-    }
-
-    public Step?: number
-
-    public WithStep(value?: number): LinearCollectionSelectorBuilder {
-        this.Step = value
-        return this
-    }
-
-    public IsStep?: boolean
-
-    public WithIsStep(value?: boolean): LinearCollectionSelectorBuilder {
-        this.IsStep = value
-        return this
+    public toString(): string {
+        let str = JsonpathLeftBracket;
+        if (this.Start !== undefined) {
+            str += this.Start;
+        }
+        str += ':';
+        if (this.End !== undefined) {
+            str += this.End;
+        }
+        str += ':';
+        if (this.Step !== undefined) {
+            str += this.Step;
+        }
+        str += JsonpathRightBracket;
+        return str;
     }
 }
-
-export type UnionSelector = CollectionMemberSegment[]
 
 /**
- * For final individual path segment in {@linkcode JSONPath}.
- * */
+ * CollectionMemberSegment represents a single atomic segment in a JSONPath.
+ *
+ * It holds information about the key, index, or selector used at that specific point in the path.
+ */
 export class CollectionMemberSegment {
-    public Key?: string
-    public IsKey?: boolean
-    public IsKeyRoot?: boolean
-    public IsKeyIndexAll?: boolean
-    public Index?: number
-    public IsIndex?: boolean
-    public ExpectLinear?: boolean
-    public ExpectAssociative?: boolean
-    public LinearCollectionSelector?: LinearCollectionSelector
-    public UnionSelector?: UnionSelector
-
-    private constructor(builder: CollectionMemberSegmentBuilder) {
-        Object.assign(this, builder)
+    /**
+     * Key represents the map key or property name.
+     *  */
+    private _Key?: string;
+    public get Key(): string | undefined {
+        return this._Key;
+    }
+    public set Key(value: string | undefined) {
+        this._Key = value;
     }
 
-    public static create(): CollectionMemberSegmentBuilder {
-        return new CollectionMemberSegmentBuilder()
+    /**
+     * IsKeyIndexAll is true if the segment is a wildcard `*`.
+     */
+    private _IsKeyIndexAll: boolean = false;
+    public get IsKeyIndexAll(): boolean {
+        return this._IsKeyIndexAll;
+    }
+    public set IsKeyIndexAll(value: boolean) {
+        this._IsKeyIndexAll = value;
+    }
+
+    /**
+     * IsKeyRoot is true if the segment is the root `$`.
+     */
+    private _IsKeyRoot: boolean = false;
+    public get IsKeyRoot(): boolean {
+        return this._IsKeyRoot;
+    }
+    public set IsKeyRoot(value: boolean) {
+        this._IsKeyRoot = value;
+    }
+
+    public _Index?: number;
+    public get Index(): number | undefined {
+        return this._Index;
+    }
+    public set Index(value: number | undefined) {
+        this._Index = value;
+    }
+
+    public _ExpectLinear: boolean = false;
+    public get ExpectLinear(): boolean {
+        return this._ExpectLinear;
+    }
+    public set ExpectLinear(value: boolean) {
+        this._ExpectLinear = value;
+    }
+
+    public _ExpectAssociative: boolean = false;
+    public get ExpectAssociative(): boolean {
+        return this._ExpectAssociative;
+    }
+    public set ExpectAssociative(value: boolean) {
+        this._ExpectAssociative = value;
+    }
+
+    public _LinearCollectionSelector?: LinearCollectionSelector;
+    public get LinearCollectionSelector(): LinearCollectionSelector | undefined {
+        return this._LinearCollectionSelector;
+    }
+    public set LinearCollectionSelector(value: LinearCollectionSelector | undefined) {
+        this._LinearCollectionSelector = value;
+    }
+
+    public _UnionSelector?: CollectionMemberSegment[];
+    public get UnionSelector(): CollectionMemberSegment[] | undefined {
+        return this._UnionSelector;
+    }
+    public set UnionSelector(value: CollectionMemberSegment[] | undefined) {
+        this._UnionSelector = value;
+    }
+
+    public toString(): string {
+        if (this.Key !== undefined && !this.IsKeyIndexAll && !this.IsKeyRoot) {
+            return getJsonKey(this.Key);
+        }
+
+        if (this.IsKeyIndexAll) {
+            if (this.ExpectAssociative) {
+                return JsonpathKeyIndexAll;
+            }
+            return `${JsonpathLeftBracket}${JsonpathKeyIndexAll}${JsonpathRightBracket}`;
+        }
+
+        if (this.IsKeyRoot) {
+            return JsonpathKeyRoot;
+        }
+
+        if (this.Index !== undefined) {
+            return `${JsonpathLeftBracket}${this.Index}${JsonpathRightBracket}`;
+        }
+
+        if (this.LinearCollectionSelector) {
+            return this.LinearCollectionSelector.toString();
+        }
+
+        if (this.UnionSelector && this.UnionSelector.length > 0) {
+            const segmentsStr: string[] = [];
+            for (const u of this.UnionSelector) {
+                let uStr = u.toString();
+                if (uStr !== '') {
+                    if (uStr.startsWith(JsonpathLeftBracket)) {
+                        uStr = uStr.substring(1);
+                    }
+                    if (uStr.endsWith(JsonpathRightBracket)) {
+                        uStr = uStr.substring(0, uStr.length - 1);
+                    }
+                    segmentsStr.push(uStr);
+                }
+            }
+            if (segmentsStr.length > 0) {
+                return `${JsonpathLeftBracket}${segmentsStr.join(',')}${JsonpathRightBracket}`;
+            }
+        }
+
+        return '';
     }
 }
 
-export class CollectionMemberSegmentBuilder {
-    public build() {
-        return new (CollectionMemberSegment as any)(this) as CollectionMemberSegment
-    }
-
-    public Key?: string
-
-    public WithKey(value?: string): CollectionMemberSegmentBuilder {
-        this.Key = value
-        return this
-    }
-
-    public IsKey?: boolean
-
-    public WithIsKey(value?: boolean): CollectionMemberSegmentBuilder {
-        this.IsKey = value
-        return this
-    }
-
-    public IsKeyRoot?: boolean
-
-    public WithIsKeyRoot(value?: boolean): CollectionMemberSegmentBuilder {
-        this.IsKeyRoot = value
-        return this
-    }
-
-    public IsKeyIndexAll?: boolean
-
-    public WithIsKeyIndexAll(value?: boolean): CollectionMemberSegmentBuilder {
-        this.IsKeyIndexAll = value
-        return this
-    }
-
-    public Index?: number
-
-    public WithIndex(value?: number): CollectionMemberSegmentBuilder {
-        this.Index = value
-        return this
-    }
-
-    public IsIndex?: boolean
-
-    public WithIsIndex(value?: boolean): CollectionMemberSegmentBuilder {
-        this.IsIndex = value
-        return this
-    }
-
-    public ExpectLinear?: boolean
-
-    public WithExpectLinear(value?: boolean): CollectionMemberSegmentBuilder {
-        this.ExpectLinear = value
-        return this
-    }
-
-    public ExpectAssociative?: boolean
-
-    public WithExpectAssociative(value?: boolean): CollectionMemberSegmentBuilder {
-        this.ExpectAssociative = value
-        return this
-    }
-
-    public LinearCollectionSelector?: LinearCollectionSelector
-
-    public WithLinearCollectionSelector(value?: LinearCollectionSelector): CollectionMemberSegmentBuilder {
-        this.LinearCollectionSelector = value
-        return this
-    }
-
-    public UnionSelector?: UnionSelector
-
-    public WithUnionSelector(value?: UnionSelector): CollectionMemberSegmentBuilder {
-        this.UnionSelector = value
-        return this
-    }
-}
-
-export const JsonpathKeyIndexAll = '*'
-export const JsonpathKeyRoot = '$'
-export const JsonpathDotNotation = '.'
-export const JsonpathRecursiveDescentNotation = '..'
-export const JsonpathLeftBracket = '['
-export const JsonpathRightBracket = ']'
+export const JsonpathKeyIndexAll = '*';
+export const JsonpathKeyRoot = '$';
+export const JsonpathDotNotation = '.';
+export const JsonpathRecursiveDescentNotation = '..';
+export const JsonpathLeftBracket = '[';
+export const JsonpathRightBracket = ']';
