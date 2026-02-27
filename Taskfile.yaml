@@ -81,7 +81,7 @@ tasks:
             Publish package on npm
         cmds:
             - echo "📦 Publishing ..."
-            - npm run publish
+            - npm run release
 
     format:
         desc: |

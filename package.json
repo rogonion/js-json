@@ -20,7 +20,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "prepublishOnly": "npm run build",
-        "publish": "npm publish --access public",
+        "release": "npm publish --access public",
         "format": "prettier --write ."
     },
     "exports": {
