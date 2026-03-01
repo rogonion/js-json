@@ -304,6 +304,45 @@ export class DynamicSchemaNode implements Schema {
         return true;
     }
 
+    public static fromJSON(json: string | object): DynamicSchemaNode {
+        let data: any = json;
+        if (typeof json === 'string') {
+            data = JSON.parse(json);
+        }
+
+        const instance = new DynamicSchemaNode();
+        if (data) {
+            if (data.Kind) instance.Kind = data.Kind;
+            if (data.TypeOf) instance.TypeOf = data.TypeOf;
+            if (typeof data.Nullable === 'boolean') instance.Nullable = data.Nullable;
+            if (typeof data.ChildNodesMustBeValid === 'boolean') instance.ChildNodesMustBeValid = data.ChildNodesMustBeValid;
+
+            if (data.ChildNodes) {
+                instance.ChildNodes = {};
+                for (const key in data.ChildNodes) {
+                    instance.ChildNodes[key] = SchemaFromJSON(data.ChildNodes[key]);
+                }
+            }
+            if (data.ChildNodesAssociativeCollectionEntriesKeySchema) {
+                instance.ChildNodesAssociativeCollectionEntriesKeySchema = SchemaFromJSON(
+                    data.ChildNodesAssociativeCollectionEntriesKeySchema
+                );
+            }
+            if (data.ChildNodesAssociativeCollectionEntriesValueSchema) {
+                instance.ChildNodesAssociativeCollectionEntriesValueSchema = SchemaFromJSON(
+                    data.ChildNodesAssociativeCollectionEntriesValueSchema
+                );
+            }
+            if (data.ChildNodesLinearCollectionElementsSchema) {
+                instance.ChildNodesLinearCollectionElementsSchema = SchemaFromJSON(data.ChildNodesLinearCollectionElementsSchema);
+            }
+            if (data.AssociativeCollectionEntryKeySchema) {
+                instance.AssociativeCollectionEntryKeySchema = SchemaFromJSON(data.AssociativeCollectionEntryKeySchema);
+            }
+        }
+        return instance;
+    }
+
     public toJSON() {
         return {
             Kind: this.Kind,
@@ -366,6 +405,26 @@ export class DynamicSchema implements Schema {
         return true;
     }
 
+    public static fromJSON(json: string | object): DynamicSchema {
+        let data: any = json;
+        if (typeof json === 'string') {
+            data = JSON.parse(json);
+        }
+
+        const instance = new DynamicSchema();
+        if (data) {
+            if (data.DefaultSchemaNodeKey) instance.DefaultSchemaNodeKey = data.DefaultSchemaNodeKey;
+            if (Array.isArray(data.ValidSchemaNodeKeys)) instance.ValidSchemaNodeKeys = data.ValidSchemaNodeKeys;
+            if (data.Nodes) {
+                instance.Nodes = {};
+                for (const key in data.Nodes) {
+                    instance.Nodes[key] = DynamicSchemaNode.fromJSON(data.Nodes[key]);
+                }
+            }
+        }
+        return instance;
+    }
+
     public toJSON() {
         return {
             DefaultSchemaNodeKey: this.DefaultSchemaNodeKey,
@@ -398,3 +457,18 @@ export const SchemaErrorCodes = {
     DataConversionFailed: 'data conversion failed'
 } as const;
 export type SchemaErrorCode = (typeof SchemaErrorCodes)[keyof typeof SchemaErrorCodes];
+
+/**
+ * Helper to deserialize Schema from JSON.
+ */
+export function SchemaFromJSON(json: string | object): Schema {
+    let data: any = json;
+    if (typeof json === 'string') {
+        data = JSON.parse(json);
+    }
+    // Heuristic: DynamicSchema has 'Nodes', DynamicSchemaNode does not (it has ChildNodes).
+    if (data && typeof data === 'object' && 'Nodes' in data) {
+        return DynamicSchema.fromJSON(data);
+    }
+    return DynamicSchemaNode.fromJSON(data);
+}

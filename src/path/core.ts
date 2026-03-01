@@ -54,6 +54,29 @@ export class LinearCollectionSelector {
         this._Step = value;
     }
 
+    public static fromJSON(json: string | object): LinearCollectionSelector {
+        let data: any = json;
+        if (typeof json === 'string') {
+            data = JSON.parse(json);
+        }
+
+        const instance = new LinearCollectionSelector();
+        if (data) {
+            if (typeof data.Start === 'number') instance.Start = data.Start;
+            if (typeof data.End === 'number') instance.End = data.End;
+            if (typeof data.Step === 'number') instance.Step = data.Step;
+        }
+        return instance;
+    }
+
+    public toJSON(): object {
+        return {
+            Start: this.Start,
+            End: this.End,
+            Step: this.Step
+        };
+    }
+
     public toString(): string {
         let str = JsonpathLeftBracket;
         if (this.Start !== undefined) {
@@ -149,6 +172,45 @@ export class CollectionMemberSegment {
     }
     public set UnionSelector(value: CollectionMemberSegment[] | undefined) {
         this._UnionSelector = value;
+    }
+
+    public static fromJSON(json: string | object): CollectionMemberSegment {
+        let data: any = json;
+        if (typeof json === 'string') {
+            data = JSON.parse(json);
+        }
+
+        const instance = new CollectionMemberSegment();
+        if (data) {
+            if (typeof data.Key === 'string') instance.Key = data.Key;
+            if (typeof data.IsKeyIndexAll === 'boolean') instance.IsKeyIndexAll = data.IsKeyIndexAll;
+            if (typeof data.IsKeyRoot === 'boolean') instance.IsKeyRoot = data.IsKeyRoot;
+            if (typeof data.Index === 'number') instance.Index = data.Index;
+            if (typeof data.ExpectLinear === 'boolean') instance.ExpectLinear = data.ExpectLinear;
+            if (typeof data.ExpectAssociative === 'boolean') instance.ExpectAssociative = data.ExpectAssociative;
+
+            if (data.LinearCollectionSelector) {
+                instance.LinearCollectionSelector = LinearCollectionSelector.fromJSON(data.LinearCollectionSelector);
+            }
+
+            if (Array.isArray(data.UnionSelector)) {
+                instance.UnionSelector = data.UnionSelector.map((item: any) => CollectionMemberSegment.fromJSON(item));
+            }
+        }
+        return instance;
+    }
+
+    public toJSON(): object {
+        return {
+            Key: this.Key,
+            IsKeyIndexAll: this.IsKeyIndexAll,
+            IsKeyRoot: this.IsKeyRoot,
+            Index: this.Index,
+            ExpectLinear: this.ExpectLinear,
+            ExpectAssociative: this.ExpectAssociative,
+            LinearCollectionSelector: this.LinearCollectionSelector ? this.LinearCollectionSelector.toJSON() : undefined,
+            UnionSelector: this.UnionSelector ? this.UnionSelector.map((u) => u.toJSON()) : undefined
+        };
     }
 
     public toString(): string {

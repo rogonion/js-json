@@ -17,6 +17,39 @@ export class JsonError extends Error {
         // Restore prototype chain for old environments
         Object.setPrototypeOf(this, JsonError.prototype);
     }
+
+    public static fromJSON(json: string | object): JsonError {
+        let data: any = json;
+        if (typeof json === 'string') {
+            data = JSON.parse(json);
+        }
+
+        let cause: Error | undefined;
+        if (data.cause) {
+            cause = new Error(data.cause.message || String(data.cause));
+            if (data.cause.name) cause.name = data.cause.name;
+            if (data.cause.stack) cause.stack = data.cause.stack;
+        }
+
+        const instance = new JsonError(data.message || '', cause, data.name);
+        if (data.Data) {
+            instance.Data = data.Data;
+        }
+        if (data.stack) {
+            instance.stack = data.stack;
+        }
+        return instance;
+    }
+
+    public toJSON(): object {
+        return {
+            name: this.name,
+            message: this.message,
+            stack: this.stack,
+            cause: (this as any).cause,
+            Data: this.Data
+        };
+    }
 }
 
 /**
